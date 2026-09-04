@@ -1,0 +1,905 @@
+<!doctype html>
+<html lang="ar" dir="rtl" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>دفتر الرحلة</title>
+<script>
+(function(){
+  try {
+    if (localStorage.getItem("tripLedgerTheme") === "dark") {
+      document.documentElement.setAttribute("data-theme", "dark");
+    }
+  } catch(e){}
+})();
+</script>
+<style>
+  @font-face{
+    font-family:'Thmanyah Sans';
+    src:url(data:font/woff2;base64,__SANS_REGULAR_B64__) format('woff2');
+    font-weight:400; font-style:normal; font-display:swap;
+  }
+  @font-face{
+    font-family:'Thmanyah Sans';
+    src:url(data:font/woff2;base64,__SANS_MEDIUM_B64__) format('woff2');
+    font-weight:500; font-style:normal; font-display:swap;
+  }
+  @font-face{
+    font-family:'Thmanyah Sans';
+    src:url(data:font/woff2;base64,__SANS_BOLD_B64__) format('woff2');
+    font-weight:700; font-style:normal; font-display:swap;
+  }
+  @font-face{
+    font-family:'Thmanyah Serif Display';
+    src:url(data:font/woff2;base64,__SERIF_BOLD_B64__) format('woff2');
+    font-weight:700; font-style:normal; font-display:swap;
+  }
+
+  :root{
+    --paper:#FFFFFF;
+    --card:#FFFFFF;
+    --ink:#0A0A0A;
+    --ink-soft:#5C5C5C;
+    --ink-faint:#9A9A9A;
+    --rule:#E5E5E5;
+    --rule-strong:#CCCCCC;
+    --header-paper:#0A0A0A;
+    --header-ink:#FFFFFF;
+    --header-rule:rgba(255,255,255,.35);
+    --focus:#0A0A0A;
+    --shadow: 0 16px 40px -16px rgba(0,0,0,.35);
+  }
+  :root[data-theme="dark"]{
+    --paper:#0A0A0A;
+    --card:#0A0A0A;
+    --ink:#F2F2F0;
+    --ink-soft:#A6A6A3;
+    --ink-faint:#6E6E6B;
+    --rule:#262624;
+    --rule-strong:#3A3A37;
+    --header-paper:#F2F2F0;
+    --header-ink:#0A0A0A;
+    --header-rule:rgba(0,0,0,.3);
+    --focus:#F2F2F0;
+    --shadow: 0 16px 40px -16px rgba(0,0,0,.6);
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'Thmanyah Sans', 'Segoe UI', Tahoma, sans-serif;
+    font-weight:400;
+    font-size:15.5px;
+    line-height:1.7;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3{ font-family:'Thmanyah Serif Display', 'Thmanyah Sans', serif; font-weight:700; margin:0; text-wrap:balance; }
+  .mono{ font-family:'Thmanyah Sans', sans-serif; font-weight:600; font-variant-numeric:tabular-nums; }
+  button{ font-family:inherit; }
+  input,select{ font-family:inherit; font-size:inherit; color:inherit; }
+  a{ color:inherit; }
+  :focus-visible{ outline:2px solid var(--focus); outline-offset:2px; border-radius:3px; }
+
+  .eyebrow{
+    font-size:.75rem; font-weight:500;
+    color:var(--ink-faint);
+  }
+
+  /* ---------- header / boarding-pass strip ---------- */
+  .header{
+    background:var(--header-paper);
+    color:var(--header-ink);
+    padding:1.75rem 1.5rem 2.25rem;
+    position:relative;
+  }
+  .header-inner{ max-width:1100px; margin:0 auto; }
+  .header-top{
+    display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; flex-wrap:wrap;
+  }
+  .trip-name-input{
+    background:transparent; border:none; padding:0; margin:0;
+    font-family:'Thmanyah Serif Display', serif; font-weight:700; font-size:clamp(1.6rem,4vw,2.5rem);
+    color:var(--header-ink); width:100%; max-width:22ch;
+    border-bottom:2px solid transparent;
+  }
+  .trip-name-input:hover{ border-bottom-color:var(--header-rule); }
+  .trip-name-input:focus{ outline:none; border-bottom-color:var(--header-ink); }
+  .header-stats{ display:flex; gap:1.75rem; flex-wrap:wrap; align-items:flex-end; }
+  .stat{ text-align:end; }
+  .stat .value{ font-size:1.5rem; font-weight:700; }
+  .header-meta{
+    margin-top:1.1rem; display:flex; align-items:center; gap:1.25rem; flex-wrap:wrap;
+    color:var(--header-ink); opacity:.75; font-size:.85rem;
+  }
+  .currency-field{ display:inline-flex; align-items:center; gap:.4rem; }
+  .currency-field input{
+    width:3.6em; background:var(--card); border:1px solid var(--rule-strong); border-radius:5px;
+    padding:.15rem .4rem; color:var(--ink); text-align:center;
+  }
+  .theme-toggle{
+    border:1px solid var(--header-ink); background:transparent; color:var(--header-ink);
+    border-radius:100px; padding:.3rem .85rem; font-size:.78rem; font-weight:600; cursor:pointer;
+    font-family:inherit; opacity:.9;
+  }
+  .theme-toggle:hover{ background:var(--header-ink); color:var(--header-paper); opacity:1; }
+  .travelers-strip{ display:flex; align-items:center; gap:.35rem; }
+  .badge{
+    width:26px;height:26px;border-radius:50%;
+    display:inline-flex;align-items:center;justify-content:center;
+    font-family:'Thmanyah Sans'; font-weight:700; font-size:.68rem;
+    background:var(--ink); color:var(--paper);
+    border:2px solid var(--card); margin-inline-start:-8px; flex-shrink:0;
+  }
+  .badge-header{
+    background:var(--header-ink); color:var(--header-paper); border-color:var(--header-paper);
+  }
+  .travelers-strip .badge:first-child{ margin-inline-start:0; }
+  .perforation{
+    position:absolute; left:0; right:0; bottom:-1px; height:14px; overflow:hidden;
+  }
+  .perforation::before{
+    content:""; position:absolute; top:0; left:-6px; right:-6px; height:14px;
+    background-image: radial-gradient(circle 7px, var(--paper) 7px, transparent 7.5px);
+    background-size:22px 14px; background-repeat:repeat-x; background-position:0 -7px;
+  }
+
+  /* ---------- layout ---------- */
+  .layout{
+    max-width:1100px; margin:0 auto; padding:1.75rem 1.5rem 4rem;
+    display:grid; gap:1.5rem; grid-template-columns:1fr;
+  }
+  @media (min-width:900px){
+    .layout{ grid-template-columns:1fr 340px; align-items:start; }
+  }
+
+  .card{
+    background:var(--card); border:1px solid var(--rule-strong); border-radius:10px;
+  }
+  .card-head{
+    padding:1.1rem 1.25rem .9rem; display:flex; align-items:center; justify-content:space-between; gap:.75rem;
+    border-bottom:1px solid var(--rule);
+  }
+  .card-head h2{ font-size:1.3rem; }
+  .card-body{ padding:1.1rem 1.25rem 1.25rem; }
+
+  /* ---------- buttons ---------- */
+  .btn{
+    display:inline-flex; align-items:center; justify-content:center; gap:.4rem;
+    border-radius:7px; padding:.55rem 1.1rem; font-weight:700; font-size:.875rem;
+    cursor:pointer; border:1px solid var(--ink); white-space:nowrap;
+    transition:background-color .12s ease, color .12s ease;
+  }
+  .btn-primary{ background:var(--ink); color:var(--paper); }
+  .btn-primary:hover{ background:var(--paper); color:var(--ink); }
+  .btn-ghost{ background:transparent; color:var(--ink); }
+  .btn-ghost:hover{ background:var(--ink); color:var(--paper); }
+  .btn-small{ padding:.35rem .75rem; font-size:.78rem; }
+  .btn-text{ background:none; border:none; padding:.1rem .2rem; cursor:pointer; font-size:.8rem; font-weight:600; color:var(--ink-soft); }
+  .btn-text:hover{ color:var(--ink); }
+  .btn-text.danger{ text-decoration:underline; text-underline-offset:3px; }
+  .btn[disabled]{ opacity:.4; cursor:not-allowed; }
+  .btn[disabled]:hover{ background:var(--ink); color:var(--paper); }
+  .btn-ghost[disabled]:hover{ background:transparent; color:var(--ink); }
+
+  /* ---------- ledger ---------- */
+  .empty{ padding:2.2rem 1rem; text-align:center; color:var(--ink-soft); }
+  .empty h3{ font-size:1.1rem; margin-bottom:.35rem; color:var(--ink); }
+  .empty p{ margin:0 0 1rem; font-size:.9rem; }
+
+  .ledger-row{
+    display:grid; grid-template-columns:3.6rem 1fr auto auto; gap:.9rem; align-items:start;
+    padding:.9rem 1.25rem; border-bottom:1px solid var(--rule);
+  }
+  .ledger-row:last-child{ border-bottom:none; }
+  .ledger-row .date{ color:var(--ink-faint); font-size:.78rem; padding-top:.2rem; }
+  .ledger-row .desc{ font-weight:700; font-size:.95rem; }
+  .ledger-row .subline{ margin-top:.25rem; font-size:.8rem; color:var(--ink-soft); display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
+  .tag{
+    display:inline-block; font-size:.7rem; font-weight:600;
+    padding:.1rem .5rem; border-radius:100px; border:1px solid var(--rule-strong); color:var(--ink-soft);
+  }
+  .ledger-row .amount-col{ text-align:end; }
+  .ledger-row .amount{ font-weight:700; font-size:1rem; }
+  .ledger-row .actions{ display:flex; flex-direction:column; gap:.25rem; align-items:flex-end; }
+
+  /* ---------- balances / settle up ---------- */
+  .balance-row{ display:flex; align-items:center; gap:.6rem; padding:.55rem 0; }
+  .balance-row + .balance-row{ border-top:1px solid var(--rule); }
+  .balance-row .name{ flex:1; font-size:.9rem; font-weight:500; }
+  .balance-row .bar-track{ position:relative; height:5px; background:var(--rule); border-radius:3px; margin-top:.3rem; overflow:hidden; }
+  .balance-row .bar-fill{ position:absolute; top:0; bottom:0; inset-inline-start:0; border-radius:3px; background:var(--ink); }
+  .balance-row .bar-fill.owed{
+    background-image:repeating-linear-gradient(135deg, var(--ink) 0 3px, transparent 3px 7px);
+  }
+  .balance-row .bar-fill.zero{ background:var(--rule-strong); }
+  .balance-amt{ font-size:.9rem; min-width:6.5em; text-align:end; }
+  .pos{ color:var(--ink); font-weight:700; } .neg{ color:var(--ink-soft); font-weight:600; } .zero{ color:var(--ink-faint); font-weight:500; }
+
+  .settle-empty{ font-size:.88rem; color:var(--ink-soft); padding:.4rem 0; }
+  .stub{
+    border:1px dashed var(--rule-strong); border-radius:8px; padding:.7rem .8rem;
+    display:flex; align-items:center; justify-content:space-between; gap:.6rem; margin-top:.6rem;
+  }
+  .stub:first-of-type{ margin-top:0; }
+  .stub .flow{ font-size:.85rem; }
+  .stub .flow .who{ font-weight:700; }
+  .stub .flow .amt{ display:block; margin-top:.15rem; font-size:.95rem; font-weight:700; }
+
+  /* ---------- forms ---------- */
+  label{ display:block; font-size:.78rem; font-weight:600; color:var(--ink-soft); margin-bottom:.3rem; }
+  .field{ margin-bottom:.9rem; }
+  input[type=text], input[type=number], input[type=date], select{
+    width:100%; background:var(--paper); border:1px solid var(--rule-strong); border-radius:7px;
+    padding:.55rem .65rem; color:var(--ink);
+  }
+  input[type=text]:focus, input[type=number]:focus, input[type=date]:focus, select:focus{
+    outline:none; border-color:var(--ink); box-shadow:0 0 0 3px color-mix(in srgb, var(--ink) 12%, transparent);
+  }
+  .row2{ display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
+  .inline-add{ display:flex; gap:.5rem; }
+  .inline-add input{ flex:1; }
+
+  .segmented{ display:inline-flex; border:1px solid var(--ink); border-radius:7px; overflow:hidden; }
+  .segmented button{
+    background:var(--paper); border:none; padding:.45rem .8rem; font-size:.82rem; font-weight:600;
+    color:var(--ink); cursor:pointer; border-inline-end:1px solid var(--ink);
+  }
+  .segmented button:last-child{ border-inline-end:none; }
+  .segmented button.active{ background:var(--ink); color:var(--paper); }
+
+  .participant-row{ display:flex; align-items:center; gap:.6rem; padding:.35rem 0; }
+  .participant-row .name{ flex:1; font-size:.88rem; }
+  .participant-row input[type=number]{ width:6.5em; }
+  .split-remaining{ margin-top:.4rem; font-size:.8rem; text-align:end; color:var(--ink-soft); }
+  .split-remaining.done{ color:var(--ink); font-weight:700; }
+
+  /* ---------- people list ---------- */
+  .people-row{ display:flex; align-items:center; gap:.55rem; padding:.4rem 0; }
+  .people-row .name{ flex:1; font-size:.9rem; }
+
+  /* ---------- modal ---------- */
+  .overlay{
+    position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:flex-start;
+    justify-content:center; padding:4vh 1rem; overflow-y:auto; z-index:50;
+  }
+  .modal{
+    background:var(--card); border:1px solid var(--rule-strong); border-radius:12px; width:100%; max-width:460px; box-shadow:var(--shadow);
+    margin:auto;
+  }
+  .modal-head{ padding:1.1rem 1.25rem; border-bottom:1px solid var(--rule); display:flex; justify-content:space-between; align-items:center; }
+  .modal-head h2{ font-size:1.25rem; }
+  .modal-body{ padding:1.1rem 1.25rem; }
+  .modal-foot{ padding:1rem 1.25rem 1.25rem; display:flex; justify-content:flex-end; gap:.6rem; }
+  .close-x{ background:none; border:none; font-size:1.3rem; line-height:1; cursor:pointer; color:var(--ink-soft); padding:.2rem; }
+
+  .toast-wrap{ position:fixed; bottom:1.25rem; left:50%; transform:translateX(-50%); z-index:60; display:flex; flex-direction:column; gap:.5rem; align-items:center; }
+  .toast{
+    background:var(--ink); color:var(--paper); padding:.6rem 1rem; border-radius:8px; font-size:.85rem;
+  }
+  .readonly-banner{
+    max-width:1100px; margin:0 auto; padding:.6rem 1.5rem; font-size:.85rem; color:var(--ink-soft);
+    border-bottom:1px solid var(--rule);
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    *{ transition:none !important; animation:none !important; }
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  var DEFAULT_STATE = {
+    tripName: "رحلة بلا عنوان",
+    currencySymbol: "ر.س",
+    people: [],
+    expenses: [],
+    settlements: []
+  };
+
+  var CATEGORIES = ["طعام وشراب","مواصلات","سكن","أنشطة","تسوق","أخرى"];
+  var MONTHS = ["يناير","فبراير","مارس","أبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
+
+  var state = null;
+  var artifactApi = null;
+  var readOnly = false;
+
+  // ephemeral UI state
+  var ui = {
+    modal: null,       // 'expense' | 'payment' | null
+    editingExpenseId: null,
+    splitType: 'equal',
+    paymentPrefill: null,
+    toasts: []
+  };
+
+  var THEME_KEY = "tripLedgerTheme";
+  function getTheme(){
+    return document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
+  }
+  function setTheme(t){
+    document.documentElement.setAttribute("data-theme", t);
+    try { localStorage.setItem(THEME_KEY, t); } catch(e){}
+  }
+
+  function uid(){ return Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4); }
+
+  function esc(s){
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+
+  function arCount(n, one, two, plural){
+    if (n === 1) return one;
+    if (n === 2) return two;
+    return n + " " + plural;
+  }
+
+  function toCents(v){
+    var n = parseFloat(v);
+    if (isNaN(n)) return 0;
+    return Math.round(n * 100);
+  }
+  function fmt(cents){
+    var neg = cents < 0;
+    var v = (Math.abs(cents) / 100).toFixed(2);
+    return (neg ? "-" : "") + v + " " + state.currencySymbol;
+  }
+  function todayISO(){
+    var d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+  }
+  function fmtDate(iso){
+    var parts = (iso||"").split("-");
+    if (parts.length !== 3) return iso || "";
+    return parseInt(parts[2],10) + " " + MONTHS[parseInt(parts[1],10)-1];
+  }
+  function personName(id){
+    var p = state.people.find(function(p){ return p.id === id; });
+    return p ? p.name : "شخص ما";
+  }
+  function initials(name){
+    var parts = name.trim().split(/\s+/);
+    if (parts.length === 1) return parts[0].slice(0,2);
+    return parts[0][0] + parts[parts.length-1][0];
+  }
+
+  // ---------- balance math ----------
+  function equalShares(totalCents, n){
+    var base = Math.floor(totalCents / n);
+    var rem = totalCents - base * n;
+    var out = [];
+    for (var i = 0; i < n; i++) out.push(base + (i < rem ? 1 : 0));
+    return out;
+  }
+
+  function computeBalances(){
+    var bal = {};
+    state.people.forEach(function(p){ bal[p.id] = 0; });
+
+    state.expenses.forEach(function(e){
+      if (bal[e.paidBy] === undefined) return;
+      bal[e.paidBy] += e.amountCents;
+      if (e.splitType === "exact"){
+        Object.keys(e.shares || {}).forEach(function(pid){
+          if (bal[pid] !== undefined) bal[pid] -= e.shares[pid];
+        });
+      } else {
+        var parts = e.participants.filter(function(pid){ return bal[pid] !== undefined; });
+        var shares = equalShares(e.amountCents, parts.length || 1);
+        parts.forEach(function(pid, idx){ bal[pid] -= shares[idx]; });
+      }
+    });
+
+    (state.settlements || []).forEach(function(s){
+      if (bal[s.from] !== undefined) bal[s.from] += s.amountCents;
+      if (bal[s.to] !== undefined) bal[s.to] -= s.amountCents;
+    });
+
+    return bal;
+  }
+
+  function simplifyDebts(bal){
+    var creditors = [], debtors = [];
+    Object.keys(bal).forEach(function(id){
+      var v = bal[id];
+      if (v > 0) creditors.push({ id: id, amt: v });
+      else if (v < 0) debtors.push({ id: id, amt: -v });
+    });
+    creditors.sort(function(a,b){ return b.amt - a.amt; });
+    debtors.sort(function(a,b){ return b.amt - a.amt; });
+
+    var txns = [];
+    var ci = 0, di = 0;
+    while (ci < creditors.length && di < debtors.length){
+      var c = creditors[ci], d = debtors[di];
+      var amt = Math.min(c.amt, d.amt);
+      if (amt > 0) txns.push({ from: d.id, to: c.id, amountCents: amt });
+      c.amt -= amt; d.amt -= amt;
+      if (c.amt <= 0) ci++;
+      if (d.amt <= 0) di++;
+    }
+    return txns;
+  }
+
+  // ---------- persistence ----------
+  function saveLocal(){
+    try { localStorage.setItem("tripLedgerState", JSON.stringify(state)); } catch(e){}
+  }
+
+  function pushToast(msg){
+    var id = uid();
+    ui.toasts.push({ id: id, msg: msg });
+    render();
+    setTimeout(function(){
+      ui.toasts = ui.toasts.filter(function(t){ return t.id !== id; });
+      render();
+    }, 3200);
+  }
+
+  function persist(previousStateJSON){
+    saveLocal();
+    if (!artifactApi){ render(); return; }
+    artifactApi.publish({ "data.json": JSON.stringify(state) }).then(function(){
+      // this view keeps running with current state; nothing else to do
+    }).catch(function(err){
+      var code = err && err.code;
+      if (code === "conflict"){
+        pushToast("قام شخص آخر بتحديث هذه الرحلة — يتم التحديث…");
+        setTimeout(function(){ window.location.reload(); }, 900);
+        return;
+      }
+      if (code === "not_writer" || code === "not_granted" || code === "not_declared" || code === "capability_disabled"){
+        readOnly = true;
+        if (previousStateJSON) state = JSON.parse(previousStateJSON);
+        pushToast("هذه الرحلة للعرض فقط على جهازك — لا يمكن حفظ التغييرات.");
+        render();
+        return;
+      }
+      pushToast("تعذّرت مزامنة هذا التغيير. تم حفظه على هذا الجهاز فقط حالياً.");
+    });
+  }
+
+  function mutate(fn){
+    var prev = JSON.stringify(state);
+    fn();
+    render();
+    persist(prev);
+  }
+
+  // ---------- rendering ----------
+  function render(){
+    var app = document.getElementById("app");
+    app.innerHTML = renderHeader() + renderReadonlyBanner() + renderLayout() + renderModal() + renderToasts();
+  }
+
+  function renderReadonlyBanner(){
+    if (!readOnly) return "";
+    return '<div class="readonly-banner">للعرض فقط — أنت تشاهد هذه الرحلة، لكن لن يتم حفظ أي تغييرات.</div>';
+  }
+
+  function renderHeader(){
+    var total = state.expenses.reduce(function(s,e){ return s + e.amountCents; }, 0);
+    var badges = state.people.slice(0,6).map(function(p){
+      return '<span class="badge badge-header" title="' + esc(p.name) + '">' + esc(initials(p.name)) + "</span>";
+    }).join("");
+    var more = state.people.length > 6 ? '<span class="badge badge-header">+' + (state.people.length-6) + "</span>" : "";
+
+    return '' +
+    '<header class="header">' +
+      '<div class="header-inner">' +
+        '<div class="header-top">' +
+          '<div>' +
+            '<div class="eyebrow">دفتر الرحلة</div>' +
+            '<input class="trip-name-input" type="text" value="' + esc(state.tripName) + '" data-field="tripName" ' + (readOnly?"disabled":"") + ' aria-label="اسم الرحلة">' +
+          '</div>' +
+          '<div class="header-stats">' +
+            '<div class="stat"><div class="eyebrow">إجمالي الصرف</div><div class="value mono">' + fmt(total) + '</div></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="header-meta">' +
+          '<span class="currency-field">العملة <input type="text" maxlength="4" value="' + esc(state.currencySymbol) + '" data-field="currencySymbol" ' + (readOnly?"disabled":"") + ' aria-label="رمز العملة"></span>' +
+          '<span>' + arCount(state.people.length, "مسافر واحد", "مسافران", "مسافرين") + '</span>' +
+          '<span>' + arCount(state.expenses.length, "مصروف واحد", "مصروفان", "مصروفات") + '</span>' +
+          (badges ? '<span class="travelers-strip">' + badges + more + '</span>' : '') +
+          '<button type="button" class="theme-toggle" data-action="toggle-theme">' + (getTheme() === "dark" ? "الوضع الفاتح" : "الوضع الداكن") + '</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="perforation"></div>' +
+    '</header>';
+  }
+
+  function renderLayout(){
+    return '<div class="layout">' + renderLedgerCard() + renderSidebar() + '</div>';
+  }
+
+  function renderLedgerCard(){
+    var head = '<div class="card-head"><h2>المصاريف</h2>' +
+      (!readOnly ? '<button class="btn btn-primary btn-small" data-action="open-add-expense" ' + (state.people.length < 1 ? "disabled" : "") + '>إضافة مصروف</button>' : '') +
+      '</div>';
+
+    var body;
+    if (state.expenses.length === 0){
+      body = '<div class="empty"><h3>لا توجد مصاريف بعد</h3><p>' +
+        (state.people.length === 0 ? "أضف رفاق الرحلة أولاً، ثم سجّل أول مصروف." : "سجّل أول مصروف لبدء الدفتر.") +
+        '</p></div>';
+    } else {
+      var rows = state.expenses.slice().sort(function(a,b){ return (b.date||"").localeCompare(a.date||"") || b.createdAt - a.createdAt; })
+        .map(renderExpenseRow).join("");
+      body = rows;
+    }
+    return '<div><div class="card">' + head + body + '</div>' + renderPeopleCard() + '</div>';
+  }
+
+  function renderExpenseRow(e){
+    var splitLabel = e.splitType === "exact" ? "تقسيم مخصص" : ("مقسومة على " + arCount(e.participants.length, "شخص واحد", "شخصين", "أشخاص"));
+    return '' +
+    '<div class="ledger-row">' +
+      '<div class="date mono">' + esc(fmtDate(e.date)) + '</div>' +
+      '<div>' +
+        '<div class="desc">' + esc(e.description) + '</div>' +
+        '<div class="subline">' +
+          (e.category ? '<span class="tag">' + esc(e.category) + '</span>' : '') +
+          '<span>من دفع: <strong>' + esc(personName(e.paidBy)) + '</strong></span>' +
+          '<span>&middot; ' + esc(splitLabel) + '</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="amount-col"><div class="amount mono">' + fmt(e.amountCents) + '</div></div>' +
+      (readOnly ? '<div></div>' : '<div class="actions"><button class="btn-text" data-action="edit-expense" data-id="' + e.id + '">تعديل</button><button class="btn-text danger" data-action="delete-expense" data-id="' + e.id + '">حذف</button></div>') +
+    '</div>';
+  }
+
+  function renderPeopleCard(){
+    var rows = state.people.map(function(p){
+      return '<div class="people-row">' +
+        '<span class="badge">' + esc(initials(p.name)) + '</span>' +
+        '<span class="name">' + esc(p.name) + '</span>' +
+        (readOnly ? '' : '<button class="btn-text danger" data-action="remove-person" data-id="' + p.id + '">إزالة</button>') +
+      '</div>';
+    }).join("");
+
+    return '<div class="card" style="margin-top:1.5rem;">' +
+      '<div class="card-head"><h2>المسافرون</h2></div>' +
+      '<div class="card-body">' +
+        (rows || '<p class="settle-empty">لا يوجد مسافرون بعد.</p>') +
+        (readOnly ? '' : '<form class="inline-add" style="margin-top:.75rem;" data-action="add-person">' +
+          '<input type="text" name="name" placeholder="أضف مسافراً" aria-label="اسم المسافر" required>' +
+          '<button class="btn btn-ghost btn-small" type="submit">إضافة</button>' +
+        '</form>') +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderSidebar(){
+    var bal = computeBalances();
+    var maxAbs = Math.max(1, Math.max.apply(null, state.people.map(function(p){ return Math.abs(bal[p.id]||0); })));
+
+    var balRows = state.people.length === 0 ? '<p class="settle-empty">أضف مسافرين لعرض الأرصدة.</p>' :
+      state.people.map(function(p){
+        var v = bal[p.id] || 0;
+        var cls = v > 0 ? "pos" : (v < 0 ? "neg" : "zero");
+        var barCls = v > 0 ? "" : (v < 0 ? "owed" : "zero");
+        var pct = Math.round((Math.abs(v)/maxAbs)*100);
+        return '<div class="balance-row">' +
+          '<span class="badge">' + esc(initials(p.name)) + '</span>' +
+          '<div style="flex:1;">' +
+            '<div class="name">' + esc(p.name) + '</div>' +
+            '<div class="bar-track"><div class="bar-fill ' + barCls + '" style="width:' + pct + '%;"></div></div>' +
+          '</div>' +
+          '<span class="balance-amt ' + cls + ' mono">' + (v === 0 ? "تمت التسوية" : fmt(v)) + '</span>' +
+        '</div>';
+      }).join("");
+
+    var txns = state.people.length === 0 ? [] : simplifyDebts(bal);
+    var settleBody = txns.length === 0 ? '<p class="settle-empty">تمت تسوية الجميع.</p>' :
+      txns.map(function(t){
+        return '<div class="stub">' +
+          '<div class="flow">من <span class="who">' + esc(personName(t.from)) + '</span> إلى <span class="who">' + esc(personName(t.to)) + '</span>' +
+            '<span class="amt mono">' + fmt(t.amountCents) + '</span>' +
+          '</div>' +
+          (readOnly ? '' : '<button class="btn btn-ghost btn-small" data-action="open-payment" data-from="' + t.from + '" data-to="' + t.to + '" data-amount="' + (t.amountCents/100) + '">تسجيل</button>') +
+        '</div>';
+      }).join("");
+
+    return '' +
+    '<div>' +
+      '<div class="card">' +
+        '<div class="card-head"><h2>الأرصدة</h2></div>' +
+        '<div class="card-body">' + balRows + '</div>' +
+      '</div>' +
+      '<div class="card" style="margin-top:1.5rem;">' +
+        '<div class="card-head"><h2>التسوية</h2></div>' +
+        '<div class="card-body">' + settleBody + '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // ---------- modal ----------
+  function renderModal(){
+    if (!ui.modal) return "";
+    if (ui.modal === "expense") return renderExpenseModal();
+    if (ui.modal === "payment") return renderPaymentModal();
+    return "";
+  }
+
+  function renderExpenseModal(){
+    var editing = ui.editingExpenseId ? state.expenses.find(function(e){ return e.id === ui.editingExpenseId; }) : null;
+    var e = editing || { description:"", amountCents:0, paidBy: state.people[0] ? state.people[0].id : "", date: todayISO(), category:"", splitType: ui.splitType, participants: state.people.map(function(p){return p.id;}), shares:{} };
+
+    var paidByOptions = state.people.map(function(p){
+      return '<option value="' + p.id + '"' + (p.id === e.paidBy ? " selected" : "") + '>' + esc(p.name) + '</option>';
+    }).join("");
+
+    var catOptions = CATEGORIES.map(function(c){ return '<option value="' + esc(c) + '">'; }).join("");
+
+    var split = ui.splitType;
+    var totalVal = editing ? (editing.amountCents/100) : "";
+
+    var participantsHtml = state.people.map(function(p){
+      if (split === "equal"){
+        var checked = e.participants.indexOf(p.id) !== -1 ? "checked" : "";
+        return '<div class="participant-row"><label style="display:flex;align-items:center;gap:.5rem;flex:1;margin:0;font-weight:400;color:var(--ink);">' +
+          '<input type="checkbox" name="participant" value="' + p.id + '" ' + checked + '> <span class="name" style="margin:0;">' + esc(p.name) + '</span></label></div>';
+      } else {
+        var val = e.shares && e.shares[p.id] != null ? (e.shares[p.id]/100).toFixed(2) : "";
+        return '<div class="participant-row"><span class="name">' + esc(p.name) + '</span>' +
+          '<input type="number" step="0.01" min="0" name="share_' + p.id + '" placeholder="0.00" value="' + val + '"></div>';
+      }
+    }).join("");
+
+    return '<div class="overlay" data-action="overlay-close">' +
+      '<div class="modal" role="dialog" aria-modal="true" aria-label="' + (editing ? "تعديل مصروف" : "إضافة مصروف") + '">' +
+        '<form data-action="submit-expense">' +
+          '<div class="modal-head"><h2>' + (editing ? "تعديل مصروف" : "إضافة مصروف") + '</h2><button type="button" class="close-x" data-action="close-modal" aria-label="إغلاق">&times;</button></div>' +
+          '<div class="modal-body">' +
+            '<div class="field"><label>الوصف</label><input type="text" name="description" required value="' + esc(e.description) + '" placeholder="مثال: تاكسي من المطار"></div>' +
+            '<div class="row2">' +
+              '<div class="field"><label>المبلغ</label><input type="number" step="0.01" min="0.01" name="amount" required value="' + totalVal + '" placeholder="0.00"></div>' +
+              '<div class="field"><label>التاريخ</label><input type="date" name="date" value="' + esc(e.date) + '"></div>' +
+            '</div>' +
+            '<div class="row2">' +
+              '<div class="field"><label>من دفع</label><select name="paidBy">' + paidByOptions + '</select></div>' +
+              '<div class="field"><label>التصنيف</label><input type="text" name="category" list="cat-list" value="' + esc(e.category||"") + '" placeholder="اختياري"><datalist id="cat-list">' + catOptions + '</datalist></div>' +
+            '</div>' +
+            '<div class="field">' +
+              '<label>طريقة التقسيم</label>' +
+              '<div class="segmented" data-action="split-type">' +
+                '<button type="button" data-split="equal" class="' + (split==='equal'?'active':'') + '">بالتساوي</button>' +
+                '<button type="button" data-split="exact" class="' + (split==='exact'?'active':'') + '">مبالغ محددة</button>' +
+              '</div>' +
+              '<div style="margin-top:.6rem;">' + (state.people.length ? participantsHtml : '<p class="settle-empty">أضف مسافرين أولاً.</p>') + '</div>' +
+              (split === "exact" ? '<div class="split-remaining" data-remaining></div>' : '') +
+            '</div>' +
+          '</div>' +
+          '<div class="modal-foot">' +
+            (editing ? '<button type="button" class="btn-text danger" data-action="delete-expense" data-id="' + editing.id + '" style="margin-inline-end:auto;">حذف</button>' : '') +
+            '<button type="button" class="btn btn-ghost" data-action="close-modal">إلغاء</button>' +
+            '<button type="submit" class="btn btn-primary">' + (editing ? "حفظ التعديلات" : "إضافة المصروف") + '</button>' +
+          '</div>' +
+          '<input type="hidden" name="editingId" value="' + (editing ? editing.id : "") + '">' +
+        '</form>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderPaymentModal(){
+    var pf = ui.paymentPrefill || {};
+    var opts = state.people.map(function(p){ return '<option value="' + p.id + '">' + esc(p.name) + '</option>'; }).join("");
+    return '<div class="overlay" data-action="overlay-close">' +
+      '<div class="modal" role="dialog" aria-modal="true" aria-label="تسجيل دفعة">' +
+        '<form data-action="submit-payment">' +
+          '<div class="modal-head"><h2>تسجيل دفعة</h2><button type="button" class="close-x" data-action="close-modal" aria-label="إغلاق">&times;</button></div>' +
+          '<div class="modal-body">' +
+            '<p style="color:var(--ink-soft); font-size:.88rem; margin-top:0;">سجّل دفعة تمت خارج الدفتر — تُعدَّل الأرصدة دون إضافة مصروف جديد.</p>' +
+            '<div class="row2">' +
+              '<div class="field"><label>من</label><select name="from">' + opts.replace('value="'+pf.from+'"','value="'+pf.from+'" selected') + '</select></div>' +
+              '<div class="field"><label>إلى</label><select name="to">' + opts.replace('value="'+pf.to+'"','value="'+pf.to+'" selected') + '</select></div>' +
+            '</div>' +
+            '<div class="field"><label>المبلغ</label><input type="number" step="0.01" min="0.01" name="amount" required value="' + (pf.amount||"") + '"></div>' +
+          '</div>' +
+          '<div class="modal-foot">' +
+            '<button type="button" class="btn btn-ghost" data-action="close-modal">إلغاء</button>' +
+            '<button type="submit" class="btn btn-primary">تسجيل الدفعة</button>' +
+          '</div>' +
+        '</form>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderToasts(){
+    if (!ui.toasts.length) return "";
+    return '<div class="toast-wrap">' + ui.toasts.map(function(t){ return '<div class="toast">' + esc(t.msg) + '</div>'; }).join("") + '</div>';
+  }
+
+  // ---------- events ----------
+  document.addEventListener("click", function(e){
+    var actionEl = e.target.closest("[data-action]");
+    if (!actionEl) return;
+    var action = actionEl.getAttribute("data-action");
+
+    if (action === "overlay-close" && e.target === actionEl){ closeModal(); return; }
+    if (action === "close-modal"){ closeModal(); return; }
+
+    if (action === "open-add-expense"){
+      ui.modal = "expense"; ui.editingExpenseId = null; ui.splitType = "equal"; render(); return;
+    }
+    if (action === "edit-expense"){
+      var id = actionEl.getAttribute("data-id");
+      var exp = state.expenses.find(function(x){ return x.id === id; });
+      ui.modal = "expense"; ui.editingExpenseId = id; ui.splitType = exp ? exp.splitType : "equal";
+      render(); return;
+    }
+    if (action === "delete-expense"){
+      var did = actionEl.getAttribute("data-id");
+      if (!confirm("حذف هذا المصروف؟")) return;
+      mutate(function(){
+        state.expenses = state.expenses.filter(function(x){ return x.id !== did; });
+      });
+      closeModal();
+      return;
+    }
+    if (action === "remove-person"){
+      var pid = actionEl.getAttribute("data-id");
+      var used = state.expenses.some(function(x){ return x.paidBy === pid || x.participants.indexOf(pid) !== -1; }) ||
+                 (state.settlements||[]).some(function(s){ return s.from === pid || s.to === pid; });
+      if (used){ pushToast("لا يمكن إزالة " + personName(pid) + " — توجد مصاريف مرتبطة بهذا الاسم. احذف تلك المصاريف أولاً."); return; }
+      mutate(function(){ state.people = state.people.filter(function(p){ return p.id !== pid; }); });
+      return;
+    }
+    if (action === "split-type"){
+      var btn = e.target.closest("button[data-split]");
+      if (!btn) return;
+      ui.splitType = btn.getAttribute("data-split");
+      render(); return;
+    }
+    if (action === "toggle-theme"){
+      setTheme(getTheme() === "dark" ? "light" : "dark");
+      render();
+      return;
+    }
+    if (action === "open-payment"){
+      ui.paymentPrefill = { from: actionEl.getAttribute("data-from"), to: actionEl.getAttribute("data-to"), amount: actionEl.getAttribute("data-amount") };
+      ui.modal = "payment"; render(); return;
+    }
+  });
+
+  document.addEventListener("submit", function(e){
+    var form = e.target.closest("[data-action]");
+    if (!form) return;
+    var action = form.getAttribute("data-action");
+    e.preventDefault();
+
+    if (action === "add-person"){
+      var input = form.querySelector('input[name="name"]');
+      var name = (input.value||"").trim();
+      if (!name) return;
+      mutate(function(){ state.people.push({ id: uid(), name: name }); });
+      return;
+    }
+
+    if (action === "submit-expense"){
+      var fd = new FormData(form);
+      var description = (fd.get("description")||"").toString().trim();
+      var amountCents = toCents(fd.get("amount"));
+      var paidBy = fd.get("paidBy");
+      var date = fd.get("date") || todayISO();
+      var category = (fd.get("category")||"").toString().trim();
+      var editingId = fd.get("editingId");
+
+      if (!description || amountCents <= 0 || !paidBy){ pushToast("أدخل الوصف والمبلغ ومن دفع."); return; }
+
+      var participants = [];
+      var shares = {};
+      if (ui.splitType === "equal"){
+        form.querySelectorAll('input[name="participant"]:checked').forEach(function(cb){ participants.push(cb.value); });
+        if (participants.length === 0){ pushToast("اختر شخصاً واحداً على الأقل للمشاركة في التقسيم."); return; }
+      } else {
+        var sum = 0;
+        state.people.forEach(function(p){
+          var raw = fd.get("share_" + p.id);
+          var c = raw ? toCents(raw) : 0;
+          if (c > 0){ shares[p.id] = c; participants.push(p.id); sum += c; }
+        });
+        if (participants.length === 0){ pushToast("أدخل حصة شخص واحد على الأقل."); return; }
+        if (sum !== amountCents){ pushToast("مجموع الحصص " + fmt(sum) + "، لكن الإجمالي " + fmt(amountCents) + "."); return; }
+      }
+
+      mutate(function(){
+        if (editingId){
+          var ex = state.expenses.find(function(x){ return x.id === editingId; });
+          if (ex){
+            ex.description = description; ex.amountCents = amountCents; ex.paidBy = paidBy;
+            ex.date = date; ex.category = category; ex.splitType = ui.splitType;
+            ex.participants = participants; ex.shares = shares;
+          }
+        } else {
+          state.expenses.push({
+            id: uid(), description: description, amountCents: amountCents, paidBy: paidBy,
+            date: date, category: category, splitType: ui.splitType, participants: participants,
+            shares: shares, createdAt: Date.now()
+          });
+        }
+      });
+      closeModal();
+      return;
+    }
+
+    if (action === "submit-payment"){
+      var pfd = new FormData(form);
+      var from = pfd.get("from"), to = pfd.get("to");
+      var amt = toCents(pfd.get("amount"));
+      if (!from || !to || from === to || amt <= 0){ pushToast("تحقق من بيانات الدفعة وحاول مرة أخرى."); return; }
+      mutate(function(){
+        state.settlements = state.settlements || [];
+        state.settlements.push({ id: uid(), from: from, to: to, amountCents: amt, date: todayISO() });
+      });
+      closeModal();
+      return;
+    }
+  });
+
+  document.addEventListener("input", function(e){
+    if (e.target.matches('.modal input[type="number"][name^="share_"]')){
+      var modal = e.target.closest(".modal");
+      var totalInput = modal.querySelector('input[name="amount"]');
+      var total = toCents(totalInput ? totalInput.value : 0);
+      var sum = 0;
+      modal.querySelectorAll('input[name^="share_"]').forEach(function(inp){ sum += toCents(inp.value || 0); });
+      var remainingEl = modal.querySelector("[data-remaining]");
+      if (remainingEl){
+        var diff = total - sum;
+        remainingEl.textContent = diff === 0 ? "تم توزيع كامل المبلغ" : (diff > 0 ? (fmt(diff) + " متبقٍ للتوزيع") : (fmt(Math.abs(diff)) + " زيادة عن الإجمالي"));
+        remainingEl.classList.toggle("done", diff === 0);
+      }
+    }
+  });
+
+  document.addEventListener("blur", function(e){
+    if (e.target.matches('[data-field="tripName"]')){
+      var v = e.target.value.trim() || "رحلة بلا عنوان";
+      if (v !== state.tripName) mutate(function(){ state.tripName = v; });
+    }
+    if (e.target.matches('[data-field="currencySymbol"]')){
+      var cv = e.target.value.trim() || "ر.س";
+      if (cv !== state.currencySymbol) mutate(function(){ state.currencySymbol = cv; });
+    }
+  }, true);
+
+  document.addEventListener("keydown", function(e){
+    if (e.key === "Escape" && ui.modal){ closeModal(); }
+  });
+
+  function closeModal(){
+    ui.modal = null; ui.editingExpenseId = null; ui.paymentPrefill = null;
+    render();
+  }
+
+  // ---------- boot ----------
+  function boot(initialState){
+    state = initialState;
+    if (!state.settlements) state.settlements = [];
+    render();
+  }
+
+  window.claude && window.claude.use ? window.claude.use("artifact").then(function(api){ artifactApi = api; }) : null;
+
+  fetch("data.json", { cache: "no-store" }).then(function(r){
+    return r.ok ? r.json() : null;
+  }).catch(function(){ return null; }).then(function(remote){
+    if (remote){ boot(remote); return; }
+    var local = null;
+    try { local = JSON.parse(localStorage.getItem("tripLedgerState")); } catch(e){}
+    boot(local || JSON.parse(JSON.stringify(DEFAULT_STATE)));
+  });
+
+})();
+</script>
+</body>
+</html>
