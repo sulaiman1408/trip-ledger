@@ -346,15 +346,25 @@
     display:flex; align-items:center; gap:.4rem; border:1px solid var(--rule-strong); border-radius:8px;
     padding:.3rem .5rem; font-size:.78rem; max-width:11rem; background:var(--paper);
   }
+  .attachment-link{
+    display:flex; align-items:center; gap:.4rem; flex:1; min-width:0; text-decoration:none; color:inherit;
+    cursor:pointer; background:none; border:none; padding:0; font:inherit; text-align:start;
+  }
   .attachment-chip img{ width:24px; height:24px; object-fit:cover; border-radius:4px; flex-shrink:0; }
   .attachment-file-icon{ font-size:1rem; flex-shrink:0; }
   .attachment-name{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink); text-decoration:none; flex:1; }
-  .attachment-name:hover{ text-decoration:underline; }
+  .attachment-link:hover .attachment-name{ text-decoration:underline; }
   .attachment-remove{ background:none; border:none; cursor:pointer; color:var(--ink-soft); font-size:1rem; line-height:1; padding:0; flex-shrink:0; }
   .attachment-remove:hover{ color:var(--ink); }
   .attachment-add-btn{
     display:inline-flex; align-items:center; gap:.3rem; border:1px dashed var(--rule-strong); border-radius:7px;
     padding:.45rem .75rem; font-size:.82rem; font-weight:600; color:var(--ink-soft); cursor:pointer;
+  }
+  .lightbox-overlay{ background:rgba(0,0,0,.75); z-index:60; }
+  .lightbox-box{ position:relative; max-width:min(90vw, 900px); max-height:90vh; margin:auto; }
+  .lightbox-box img{ display:block; max-width:100%; max-height:90vh; border-radius:8px; box-shadow:var(--shadow); }
+  .lightbox-close{
+    position:absolute; top:-2.2rem; inset-inline-end:0; color:#fff; font-size:1.6rem;
   }
   .attachment-add-btn:hover{ border-color:var(--ink); color:var(--ink); }
 
@@ -489,7 +499,8 @@
     toasts: [],
     currencyCustom: false,
     pendingAttachments: [],  // attachments staged in the open add/edit-expense modal
-    convertOpen: {}          // which "convert to riyal" panels are expanded, keyed by "currency|from|to"
+    convertOpen: {},         // which "convert to riyal" panels are expanded, keyed by "currency|from|to"
+    lightbox: null           // { dataUrl, name } of the attachment image currently being previewed
   };
 
   var MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024; // 5MB per file
@@ -737,11 +748,11 @@
 
     if (ui.view !== "trip"){
       trip = null;
-      app.innerHTML = renderHome() + renderModal() + renderReadonlyBanner() + renderToasts();
+      app.innerHTML = renderHome() + renderModal() + renderLightbox() + renderReadonlyBanner() + renderToasts();
       return;
     }
 
-    app.innerHTML = renderHeader() + renderReadonlyBanner() + renderLayout() + renderModal() + renderToasts();
+    app.innerHTML = renderHeader() + renderReadonlyBanner() + renderLayout() + renderModal() + renderLightbox() + renderToasts();
   }
 
   function renderReadonlyBanner(){
@@ -1021,6 +1032,42 @@
     return "";
   }
 
+  // ---------- attachment lightbox ----------
+  function renderLightbox(){
+    if (!ui.lightbox) return "";
+    return '<div class="overlay lightbox-overlay" data-action="close-lightbox">' +
+      '<div class="lightbox-box">' +
+        '<button type="button" class="close-x lightbox-close" data-action="close-lightbox" aria-label="إغلاق">&times;</button>' +
+        '<img src="' + ui.lightbox.dataUrl + '" alt="' + esc(ui.lightbox.name) + '">' +
+      '</div>' +
+    '</div>';
+  }
+
+  function viewAttachment(a){
+    if (!a) return;
+    var isImage = (a.type || "").indexOf("image/") === 0;
+    if (isImage){
+      ui.lightbox = { dataUrl: a.dataUrl, name: a.name };
+      render();
+      return;
+    }
+    // Non-image files (e.g. PDFs): browsers block top-level navigation to
+    // data: URLs, so convert to a blob: URL first and open that in a new tab.
+    try {
+      var parts = a.dataUrl.split(",");
+      var mimeMatch = /^data:([^;]+)/.exec(parts[0]);
+      var mime = mimeMatch ? mimeMatch[1] : "application/octet-stream";
+      var byteChars = atob(parts[1]);
+      var bytes = new Uint8Array(byteChars.length);
+      for (var i = 0; i < byteChars.length; i++){ bytes[i] = byteChars.charCodeAt(i); }
+      var blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
+      window.open(blobUrl, "_blank");
+      setTimeout(function(){ URL.revokeObjectURL(blobUrl); }, 60000);
+    } catch (err){
+      pushToast("تعذّر فتح المرفق.");
+    }
+  }
+
   // ---------- statistics ----------
   function renderStatsModal(){
     var byCurrency = {};
@@ -1119,8 +1166,10 @@
     var chips = ui.pendingAttachments.map(function(a){
       var isImage = (a.type || "").indexOf("image/") === 0;
       return '<div class="attachment-chip">' +
-        (isImage ? '<img src="' + a.dataUrl + '" alt="">' : '<span class="attachment-file-icon">📄</span>') +
-        '<a href="' + a.dataUrl + '" target="_blank" rel="noopener" class="attachment-name" title="' + esc(a.name) + '">' + esc(a.name) + '</a>' +
+        '<button type="button" class="attachment-link" data-action="view-attachment" data-id="' + a.id + '" title="' + esc(a.name) + ' (فتح للمعاينة)">' +
+          (isImage ? '<img src="' + a.dataUrl + '" alt="">' : '<span class="attachment-file-icon">📄</span>') +
+          '<span class="attachment-name">' + esc(a.name) + '</span>' +
+        '</button>' +
         (readOnly ? '' : '<button type="button" class="attachment-remove" data-action="remove-attachment" data-id="' + a.id + '" aria-label="إزالة المرفق">&times;</button>') +
       '</div>';
     }).join("");
@@ -1233,6 +1282,7 @@
 
     if (action === "overlay-close" && e.target === actionEl){ closeModal(); return; }
     if (action === "close-modal"){ closeModal(); return; }
+    if (action === "close-lightbox" && e.target === actionEl){ ui.lightbox = null; render(); return; }
 
     if (action === "open-add-expense"){
       ui.modal = "expense"; ui.editingExpenseId = null; ui.splitType = "equal"; ui.pendingAttachments = []; render(); return;
@@ -1243,6 +1293,11 @@
       ui.modal = "expense"; ui.editingExpenseId = id; ui.splitType = exp ? exp.splitType : "equal";
       ui.pendingAttachments = exp && exp.attachments ? exp.attachments.slice() : [];
       render(); return;
+    }
+    if (action === "view-attachment"){
+      var vid = actionEl.getAttribute("data-id");
+      viewAttachment(ui.pendingAttachments.find(function(a){ return a.id === vid; }));
+      return;
     }
     if (action === "remove-attachment"){
       var aid = actionEl.getAttribute("data-id");
@@ -1488,6 +1543,7 @@
   });
 
   document.addEventListener("keydown", function(e){
+    if (e.key === "Escape" && ui.lightbox){ ui.lightbox = null; render(); return; }
     if (e.key === "Escape" && ui.modal){ closeModal(); }
   });
 
