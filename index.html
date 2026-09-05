@@ -592,7 +592,8 @@
     pendingLocalImport: null, // local {trips:[...]} found in this browser's storage, offered for import after first sign-in
     pendingJoinToken: null,   // invite token from a ?join=<token> link, cleared once acceptInvite() has consumed it
     pendingJoinPreview: null, // { tripName, personName } shown on the auth screen before signing up
-    pendingJoinTripId: null   // set once the invite is accepted; navigates into the trip as soon as it appears via sync
+    pendingJoinTripId: null,  // set once the invite is accepted; navigates into the trip as soon as it appears via sync
+    stateLoadError: ''        // set if the Firestore trips listener itself failed (e.g. a rules/permission problem)
   };
 
   // Attachments are embedded as base64 directly in each trip's Firestore
@@ -872,6 +873,7 @@
 
     if (ui.bootError){ app.innerHTML = renderBootError(); return; }
     if (!ui.authUser){ app.innerHTML = renderAuthScreen(); return; }
+    if (ui.stateLoadError){ app.innerHTML = renderStateLoadError(); return; }
     if (!state){ app.innerHTML = renderAuthLoading(); return; }
 
     if (ui.view === "trip"){
@@ -924,6 +926,16 @@
 
   function renderAuthLoading(){
     return '<div class="auth-wrap"><div class="auth-card"><div class="eyebrow">دفتر الرحلة</div><p>جارٍ التحميل…</p></div></div>';
+  }
+
+  function renderStateLoadError(){
+    return '<div class="auth-wrap"><div class="auth-card">' +
+      '<div class="eyebrow">دفتر الرحلة</div>' +
+      '<h1 class="auth-title">تعذّر تحميل رحلاتك</h1>' +
+      '<p class="auth-error">' + esc(ui.stateLoadError) + '</p>' +
+      '<button type="button" class="btn btn-primary" data-action="retry-load" style="width:100%; margin-bottom:.5rem;">إعادة المحاولة</button>' +
+      '<button type="button" class="auth-toggle" data-action="signout">تسجيل خروج</button>' +
+    '</div></div>';
   }
 
   function renderBootError(){
@@ -1549,6 +1561,12 @@
       });
       return;
     }
+    if (action === "retry-load"){
+      ui.stateLoadError = "";
+      render();
+      loadUserState(ui.authUser.uid);
+      return;
+    }
     if (action === "dismiss-import"){
       ui.pendingLocalImport = null; render(); return;
     }
@@ -1927,10 +1945,15 @@
   function loadUserState(uidVal){
     var q = fb.mods.fs.query(fb.mods.fs.collection(fb.db, "trips"), fb.mods.fs.where("memberUids", "array-contains", uidVal));
     fb.mods.fs.onSnapshot(q, function(snap){
+      ui.stateLoadError = "";
       boot(snap.docs.map(function(d){ return d.data(); }));
       if (!checkPendingJoinNavigation()) maybeOfferLocalImport();
-    }, function(){
-      pushToast("تعذّر تحميل بياناتك من الخادم.");
+    }, function(err){
+      // Surfaced on-screen (not just a toast) because a failure here
+      // otherwise leaves the app stuck on the loading screen forever
+      // with no way for the user to tell us *what* Firestore rejected.
+      ui.stateLoadError = (err && (err.code || err.message)) || "تعذّر تحميل بياناتك من الخادم.";
+      render();
     });
   }
 
@@ -2022,6 +2045,7 @@
       } else {
         ui.authUser = null;
         ui.authEmailDraft = "";
+        ui.stateLoadError = "";
         state = null;
         render();
       }
