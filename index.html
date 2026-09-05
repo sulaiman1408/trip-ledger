@@ -377,6 +377,10 @@
     box-shadow:var(--shadow); padding:1.5rem;
   }
   .auth-title{ font-size:1.4rem; margin:.3rem 0 1rem; }
+  .join-banner{
+    background:color-mix(in srgb, var(--ink) 6%, transparent); border:1px solid var(--rule-strong);
+    border-radius:7px; padding:.6rem .75rem; font-size:.85rem; margin-bottom:.9rem;
+  }
   .auth-error{
     background:color-mix(in srgb, #d33 12%, transparent); border:1px solid color-mix(in srgb, #d33 35%, transparent);
     color:#a12; border-radius:7px; padding:.55rem .7rem; font-size:.85rem; margin-bottom:.9rem;
@@ -391,7 +395,11 @@
 
   /* ---------- people list ---------- */
   .people-row{ display:flex; align-items:center; gap:.55rem; padding:.4rem 0; }
-  .people-row .name{ flex:1; font-size:.9rem; }
+  .people-row .name{ flex:1; font-size:.9rem; display:flex; flex-direction:column; }
+  .people-row .phone{ font-size:.76rem; color:var(--ink-soft); }
+  .joined-badge{ font-size:.78rem; color:var(--ink-soft); white-space:nowrap; }
+  .people-add-form{ flex-wrap:wrap; }
+  .people-add-form input[name="phone"]{ flex:1; min-width:8rem; }
 
   /* ---------- modal ---------- */
   .overlay{
@@ -581,7 +589,10 @@
     authBusy: false,
     authEmailDraft: '',      // preserves the typed email across re-renders (e.g. after a failed attempt)
     bootError: '',           // set if Firebase itself failed to load (offline / blocked / misconfigured)
-    pendingLocalImport: null // local {trips:[...]} found in this browser's storage, offered for import after first sign-in
+    pendingLocalImport: null, // local {trips:[...]} found in this browser's storage, offered for import after first sign-in
+    pendingJoinToken: null,   // invite token from a ?join=<token> link, cleared once acceptInvite() has consumed it
+    pendingJoinPreview: null, // { tripName, personName } shown on the auth screen before signing up
+    pendingJoinTripId: null   // set once the invite is accepted; navigates into the trip as soon as it appears via sync
   };
 
   // Attachments are embedded as base64 directly in each trip's Firestore
@@ -668,6 +679,16 @@
   }
 
   function uid(){ return Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4); }
+
+  // Invite tokens double as a security capability (whoever holds one can
+  // join the matching trip), unlike uid() above which only needs to avoid
+  // collisions — so this uses the browser's cryptographic RNG instead,
+  // for 32 bytes (256 bits) of real entropy, hex-encoded.
+  function generateInviteToken(){
+    var bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    return Array.prototype.map.call(bytes, function(b){ return b.toString(16).padStart(2, "0"); }).join("");
+  }
 
   function esc(s){
     return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
@@ -821,7 +842,7 @@
 
   function persistTrip(tripObj){
     if (!ui.authUser || !fb.db || !tripObj) return;
-    var ref = fb.mods.fs.doc(fb.db, "users", ui.authUser.uid, "trips", tripObj.id);
+    var ref = fb.mods.fs.doc(fb.db, "trips", tripObj.id);
     fb.mods.fs.setDoc(ref, tripObj).catch(function(){
       pushToast("تعذّرت مزامنة هذا التغيير. تم حفظه على هذا الجهاز فقط حالياً.");
     });
@@ -875,10 +896,17 @@
   // ---------- auth ----------
   function renderAuthScreen(){
     var isSignup = ui.authMode === "signup";
+    var joinBanner = "";
+    if (ui.pendingJoinToken){
+      joinBanner = '<div class="join-banner">🎉 ' + (ui.pendingJoinPreview
+        ? esc(ui.pendingJoinPreview.personName) + '، عندك دعوة للانضمام لرحلة "' + esc(ui.pendingJoinPreview.tripName) + '"'
+        : 'عندك دعوة للانضمام لرحلة') + ' — أنشئ حساباً أو سجّل الدخول لقبولها.</div>';
+    }
     return '<div class="auth-wrap">' +
       '<div class="auth-card">' +
         '<div class="eyebrow">دفتر الرحلة</div>' +
         '<h1 class="auth-title">' + (isSignup ? "إنشاء حساب" : "تسجيل الدخول") + '</h1>' +
+        joinBanner +
         (ui.authError ? '<p class="auth-error">' + esc(ui.authError) + '</p>' : '') +
         '<form data-action="auth-submit">' +
           '<div class="field"><label>البريد الإلكتروني</label><input type="email" name="email" required autocomplete="email" value="' + esc(ui.authEmailDraft) + '" placeholder="name@example.com"></div>' +
@@ -1115,9 +1143,16 @@
 
   function renderPeopleCard(){
     var rows = trip.people.map(function(p){
+      var inviteControl = "";
+      if (p.linkedUid){
+        inviteControl = '<span class="joined-badge" title="سجّل حساباً ودخل هذه الرحلة">✓ منضم</span>';
+      } else if (p.phone && !readOnly){
+        inviteControl = '<button type="button" class="btn-text" data-action="share-invite" data-id="' + p.id + '">مشاركة دعوة</button>';
+      }
       return '<div class="people-row">' +
         '<span class="badge">' + esc(initials(p.name)) + '</span>' +
-        '<span class="name">' + esc(p.name) + '</span>' +
+        '<span class="name">' + esc(p.name) + (p.phone ? '<span class="phone">' + esc(p.phone) + '</span>' : '') + '</span>' +
+        inviteControl +
         (readOnly ? '' : '<button class="btn-text danger" data-action="remove-person" data-id="' + p.id + '">إزالة</button>') +
       '</div>';
     }).join("");
@@ -1126,12 +1161,60 @@
       '<div class="card-head"><h2>المسافرون</h2></div>' +
       '<div class="card-body">' +
         (rows || '<p class="settle-empty">لا يوجد مسافرون بعد.</p>') +
-        (readOnly ? '' : '<form class="inline-add" style="margin-top:.75rem;" data-action="add-person">' +
+        (readOnly ? '' : '<form class="inline-add people-add-form" style="margin-top:.75rem;" data-action="add-person">' +
           '<input type="text" name="name" placeholder="أضف مسافراً" aria-label="اسم المسافر" required>' +
+          '<input type="tel" name="phone" placeholder="رقم الجوال (اختياري)" aria-label="رقم جوال المسافر">' +
           '<button class="btn btn-ghost btn-small" type="submit">إضافة</button>' +
         '</form>') +
       '</div>' +
     '</div>';
+  }
+
+  // Creates an invites/{token} Firestore document for this person, then
+  // hands the resulting link to the phone's native share sheet
+  // (WhatsApp/SMS/etc. — this app is static with no server, so it can't
+  // send a text message itself) or copies it to the clipboard as a
+  // fallback where the Web Share API isn't available (mainly desktop).
+  function shareInvite(p){
+    if (!ui.authUser || !fb.db){ pushToast("سجّل الدخول أولاً."); return; }
+    var token = generateInviteToken();
+    var inviteData = {
+      tripId: trip.id,
+      tripName: trip.tripName,
+      personId: p.id,
+      personName: p.name,
+      phone: p.phone || "",
+      createdByUid: ui.authUser.uid,
+      createdAt: Date.now(),
+      used: false
+    };
+    var ref = fb.mods.fs.doc(fb.db, "invites", token);
+    fb.mods.fs.setDoc(ref, inviteData).then(function(){
+      var link = location.origin + location.pathname + "?join=" + token;
+      var text = p.name + "، انضم لرحلة \"" + trip.tripName + "\" في دفتر الرحلة:";
+      if (navigator.share){
+        navigator.share({ title: "دعوة للانضمام لرحلة", text: text, url: link }).catch(function(err){
+          if (err && err.name === "AbortError") return; // user cancelled the share sheet — not an error
+          copyInviteLink(link);
+        });
+      } else {
+        copyInviteLink(link);
+      }
+    }).catch(function(){
+      pushToast("تعذّر إنشاء رابط الدعوة.");
+    });
+  }
+
+  function copyInviteLink(link){
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(link).then(function(){
+        pushToast("تم نسخ رابط الدعوة — أرسله عبر واتساب أو رسالة.");
+      }).catch(function(){
+        pushToast("رابط الدعوة: " + link);
+      });
+    } else {
+      pushToast("رابط الدعوة: " + link);
+    }
   }
 
   function renderSidebar(){
@@ -1472,6 +1555,12 @@
     if (action === "import-local"){
       var importedState = ui.pendingLocalImport;
       ui.pendingLocalImport = null;
+      // These trips predate accounts entirely, so they have no
+      // ownerUid/memberUids yet — this account becomes the owner.
+      importedState.trips.forEach(function(t){
+        t.ownerUid = ui.authUser.uid;
+        t.memberUids = [ui.authUser.uid];
+      });
       // Each imported trip is its own Firestore document — write them
       // directly rather than through mutate()/persist(), which only ever
       // saves the single currently-open trip.
@@ -1512,6 +1601,12 @@
         trip.expenses = trip.expenses.filter(function(x){ return x.id !== did; });
       });
       closeModal();
+      return;
+    }
+    if (action === "share-invite"){
+      var sid = actionEl.getAttribute("data-id");
+      var sp = trip.people.find(function(x){ return x.id === sid; });
+      if (sp) shareInvite(sp);
       return;
     }
     if (action === "remove-person"){
@@ -1588,7 +1683,9 @@
       var input = form.querySelector('input[name="name"]');
       var name = (input.value||"").trim();
       if (!name) return;
-      mutate(function(){ trip.people.push({ id: uid(), name: name }); });
+      var phoneInput = form.querySelector('input[name="phone"]');
+      var phone = phoneInput ? (phoneInput.value||"").trim() : "";
+      mutate(function(){ trip.people.push({ id: uid(), name: name, phone: phone || null }); });
       return;
     }
 
@@ -1598,6 +1695,8 @@
       var startDate = tfd.get("startDate") || todayISO();
       if (!tripName){ pushToast("أدخل اسم الرحلة."); return; }
       var newT = newTrip(tripName, startDate);
+      newT.ownerUid = ui.authUser.uid;
+      newT.memberUids = [ui.authUser.uid];
       ui.view = "trip"; ui.currentTripId = newT.id; ui.modal = null;
       mutate(function(){ state.trips.push(newT); });
       return;
@@ -1786,6 +1885,7 @@
     if (!t.createdAt) t.createdAt = Date.now();
     if (!t.startDate) t.startDate = todayISO();
     if (!t.exchangeRates) t.exchangeRates = {};
+    if (!t.memberUids) t.memberUids = t.ownerUid ? [t.ownerUid] : [];
     return t;
   }
 
@@ -1818,15 +1918,17 @@
   }
 
   // ---------- boot: Firebase Auth + Firestore ----------
-  // Each trip is its own document under users/{uid}/trips — listening on
-  // the collection (rather than a single per-user document) gives live
-  // multi-device sync without any one document growing unbounded as trips
-  // accumulate.
+  // Trips live in a top-level `trips` collection (not nested under the
+  // user), each document carrying a memberUids array — this is what makes
+  // sharing a trip with other accounts possible at all. Querying by
+  // "memberUids array-contains my uid" naturally returns trips this user
+  // owns AND trips they've joined, and onSnapshot on that query gives live
+  // sync across every member's devices, not just this one user's own.
   function loadUserState(uidVal){
-    var col = fb.mods.fs.collection(fb.db, "users", uidVal, "trips");
-    fb.mods.fs.onSnapshot(col, function(snap){
+    var q = fb.mods.fs.query(fb.mods.fs.collection(fb.db, "trips"), fb.mods.fs.where("memberUids", "array-contains", uidVal));
+    fb.mods.fs.onSnapshot(q, function(snap){
       boot(snap.docs.map(function(d){ return d.data(); }));
-      maybeOfferLocalImport();
+      if (!checkPendingJoinNavigation()) maybeOfferLocalImport();
     }, function(){
       pushToast("تعذّر تحميل بياناتك من الخادم.");
     });
@@ -1844,6 +1946,67 @@
     }
   }
 
+  // ---------- accepting a trip invite ----------
+  // Once the just-joined trip actually shows up via the live query in
+  // loadUserState (there's a real round-trip between the join write and
+  // it arriving here), jump straight into it.
+  function checkPendingJoinNavigation(){
+    if (!ui.pendingJoinTripId) return false;
+    var t = state.trips.find(function(x){ return x.id === ui.pendingJoinTripId; });
+    if (!t) return false;
+    ui.view = "trip"; ui.currentTripId = t.id; ui.pendingJoinTripId = null;
+    render();
+    return true;
+  }
+
+  // Shows the inviting trip/person's name on the auth screen before the
+  // visitor has even signed up — safe because invites/{token} only
+  // exposes a low-sensitivity preview (names, no financial data) and is
+  // only reachable by whoever holds the exact, unguessable token.
+  function loadJoinPreview(){
+    if (!ui.pendingJoinToken || !fb.db) return;
+    fb.mods.fs.getDoc(fb.mods.fs.doc(fb.db, "invites", ui.pendingJoinToken)).then(function(snap){
+      if (!snap.exists()) return;
+      var d = snap.data();
+      ui.pendingJoinPreview = { tripName: d.tripName, personName: d.personName };
+      if (!d.used) ui.authMode = "signup";
+      render();
+    }).catch(function(){ /* preview is a nicety — join itself still works without it */ });
+  }
+
+  function acceptInvite(token, uidVal){
+    var ref = fb.mods.fs.doc(fb.db, "invites", token);
+    fb.mods.fs.getDoc(ref).then(function(snap){
+      if (!snap.exists() || snap.data().used){
+        pushToast("رابط الدعوة غير صالح أو تم استخدامه من قبل.");
+        return;
+      }
+      var invite = snap.data();
+      var tripRef = fb.mods.fs.doc(fb.db, "trips", invite.tripId);
+      return fb.mods.fs.updateDoc(tripRef, {
+        memberUids: fb.mods.fs.arrayUnion(uidVal),
+        pendingJoinToken: token
+      }).then(function(){
+        ui.pendingJoinTripId = invite.tripId;
+        // Now a member, so a normal (non-self-join) update is allowed —
+        // link this specific person entry to the new account, cosmetic only.
+        return fb.mods.fs.getDoc(tripRef);
+      }).then(function(tripSnap){
+        var tripData = tripSnap.data();
+        var people = (tripData.people || []).map(function(p){
+          return p.id === invite.personId ? Object.assign({}, p, { linkedUid: uidVal }) : p;
+        });
+        return fb.mods.fs.updateDoc(tripRef, { people: people });
+      }).then(function(){
+        return fb.mods.fs.updateDoc(ref, { used: true });
+      }).then(function(){
+        pushToast('تم! انضممت لرحلة "' + invite.tripName + '".');
+      });
+    }).catch(function(){
+      pushToast("تعذّر قبول الدعوة. تأكد إن الرابط صحيح ولم يُستخدم من قبل.");
+    });
+  }
+
   function initAuthListener(){
     fb.mods.auth.onAuthStateChanged(fb.auth, function(user){
       ui.authBusy = false;
@@ -1851,6 +2014,11 @@
       if (user){
         ui.authUser = { uid: user.uid, email: user.email };
         loadUserState(user.uid);
+        if (ui.pendingJoinToken){
+          var joinToken = ui.pendingJoinToken;
+          ui.pendingJoinToken = null;
+          acceptInvite(joinToken, user.uid);
+        }
       } else {
         ui.authUser = null;
         ui.authEmailDraft = "";
@@ -1860,8 +2028,23 @@
     });
   }
 
+  // A `?join=<token>` link identifies an invite; stash it and strip it
+  // from the URL immediately so refreshing/re-sharing doesn't re-trigger it.
+  (function parseJoinParam(){
+    try {
+      var params = new URLSearchParams(location.search);
+      var token = params.get("join");
+      if (!token) return;
+      ui.pendingJoinToken = token;
+      params.delete("join");
+      var qs = params.toString();
+      history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash);
+    } catch (e){}
+  })();
+
   loadFirebase().then(function(){
     initAuthListener();
+    loadJoinPreview();
   }).catch(function(){
     ui.bootError = "تعذّر تحميل خدمة الحسابات — تحقّق من اتصال الإنترنت وحاول مرة أخرى.";
     render();
