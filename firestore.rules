@@ -2,12 +2,13 @@ rules_version = '2';
 
 // Paste this into: Firebase console → Firestore Database → Rules.
 //
-// Each signed-in user has exactly one document, at users/{uid}, holding
-// all of their trips/expenses. Only that user (proven by their Firebase
-// Auth uid) may read or write it — nobody else, authenticated or not.
+// Each signed-in user has their own trips subcollection, at
+// users/{uid}/trips/{tripId} — one document per trip. Only that user
+// (proven by their Firebase Auth uid) may read or write any document under
+// their own users/{uid} path — nobody else, authenticated or not.
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{uid} {
+    match /users/{uid}/{document=**} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
   }

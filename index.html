@@ -441,31 +441,35 @@
     apiKey: "REPLACE_ME",
     authDomain: "REPLACE_ME.firebaseapp.com",
     projectId: "REPLACE_ME",
-    storageBucket: "REPLACE_ME.appspot.com",
     messagingSenderId: "REPLACE_ME",
     appId: "REPLACE_ME"
   };
   var FIREBASE_SDK_VERSION = "10.14.1";
-  var fb = { auth: null, db: null, storage: null, mods: null, ready: null };
+  var fb = { auth: null, db: null, mods: null, ready: null };
 
   // Dynamic import() works in a plain classic <script> (no type="module"
   // needed), so the rest of the app can stay exactly the single
   // non-module IIFE it already is.
+  //
+  // No Firebase Storage here on purpose: Google now requires the paid
+  // Blaze plan for Storage on every project, even within its free quota.
+  // To keep this free, attachments stay embedded as base64 directly in
+  // each trip's Firestore document (see MAX_ATTACHMENT_BYTES below for
+  // the size budget that keeps a trip's document under Firestore's
+  // ~1 MiB/document cap).
   function loadFirebase(){
     if (fb.ready) return fb.ready;
     var base = "https://www.gstatic.com/firebasejs/" + FIREBASE_SDK_VERSION + "/";
     fb.ready = Promise.all([
       import(base + "firebase-app.js"),
       import(base + "firebase-auth.js"),
-      import(base + "firebase-firestore.js"),
-      import(base + "firebase-storage.js")
+      import(base + "firebase-firestore.js")
     ]).then(function(mods){
-      var appMod = mods[0], authMod = mods[1], fsMod = mods[2], storageMod = mods[3];
+      var appMod = mods[0], authMod = mods[1], fsMod = mods[2];
       var app = appMod.initializeApp(firebaseConfig);
       fb.auth = authMod.getAuth(app);
       fb.db = fsMod.getFirestore(app);
-      fb.storage = storageMod.getStorage(app);
-      fb.mods = { auth: authMod, fs: fsMod, storage: storageMod };
+      fb.mods = { auth: authMod, fs: fsMod };
       return fb;
     });
     return fb.ready;
@@ -486,10 +490,6 @@
     };
     return (code && map[code]) || "حدث خطأ غير متوقع. حاول مرة أخرى.";
   }
-
-  var DEFAULT_STATE = {
-    trips: []
-  };
 
   function newTrip(name, startDate){
     return {
@@ -587,7 +587,38 @@
     pendingLocalImport: null // local {trips:[...]} found in this browser's storage, offered for import after first sign-in
   };
 
-  var MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024; // 5MB per file
+  // Attachments are embedded as base64 directly in each trip's Firestore
+  // document (no Firebase Storage — see the note by loadFirebase() above),
+  // and Firestore caps a document at ~1 MiB total. These two limits keep a
+  // trip's document safely under that cap, leaving headroom for its
+  // people/expenses/settlements metadata: a per-file cap (base64 inflates
+  // raw size by ~33%), and a running per-trip total across every expense's
+  // attachments combined.
+  var MAX_ATTACHMENT_BYTES = 250 * 1024;         // 250KB per raw file (~340KB once base64-encoded)
+  var TRIP_ATTACHMENTS_BUDGET_BYTES = 650 * 1024; // total base64 attachment bytes allowed per trip
+
+  function readFileAsDataURL(file){
+    return new Promise(function(resolve, reject){
+      var reader = new FileReader();
+      reader.onload = function(){ resolve(reader.result); };
+      reader.onerror = function(){ reject(reader.error); };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Sum of every attachment's base64 size already committed to this trip
+  // (across all its expenses) plus whatever's staged in the open modal,
+  // excluding the expense currently being edited (its attachments are
+  // already reflected in ui.pendingAttachments).
+  function tripAttachmentBytes(excludeExpenseId){
+    var total = 0;
+    trip.expenses.forEach(function(e){
+      if (e.id === excludeExpenseId) return;
+      (e.attachments || []).forEach(function(a){ total += (a.dataUrl || "").length; });
+    });
+    ui.pendingAttachments.forEach(function(a){ total += (a.dataUrl || "").length; });
+    return total;
+  }
 
   // The add/edit-expense modal is a plain uncontrolled form — its fields aren't
   // tracked in `ui`, so a full re-render (e.g. to show a newly attached file)
@@ -768,9 +799,13 @@
   }
 
   // ---------- persistence ----------
-  // Firestore (one document per signed-in user, at users/{uid}) is the
-  // source of truth; localStorage is kept only as an offline read cache so
-  // a reload works mid-flaky-connection.
+  // Firestore: one document PER TRIP, at users/{uid}/trips/{tripId} — not
+  // one big document for the whole account. Attachments are embedded as
+  // base64 (no paid Storage — see loadFirebase() above), and Firestore
+  // caps a single document at ~1 MiB; keying documents per-trip keeps that
+  // budget independent per trip instead of shared across a user's entire
+  // history. localStorage still caches the *whole* state as one blob for
+  // fast offline reloads — no such size limit applies there.
   var saveDebounceTimer = null;
 
   function saveLocal(){
@@ -787,18 +822,25 @@
     }, 3200);
   }
 
+  function persistTrip(tripObj){
+    if (!ui.authUser || !fb.db || !tripObj) return;
+    var ref = fb.mods.fs.doc(fb.db, "users", ui.authUser.uid, "trips", tripObj.id);
+    fb.mods.fs.setDoc(ref, tripObj).catch(function(){
+      pushToast("تعذّرت مزامنة هذا التغيير. تم حفظه على هذا الجهاز فقط حالياً.");
+    });
+  }
+
+  // Almost every mutation happens while a trip is open (`trip` is the
+  // module-level reference render() just resolved for the current view),
+  // so persisting just that one document covers it. The one exception —
+  // importing local trips from the home page — writes its own documents
+  // directly via persistTrip() instead of going through mutate()/persist().
   function persist(){
     saveLocal();
     render();
-    if (!ui.authUser || !fb.db) return;
     if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
-    var uidAtSave = ui.authUser.uid;
-    saveDebounceTimer = setTimeout(function(){
-      var ref = fb.mods.fs.doc(fb.db, "users", uidAtSave);
-      fb.mods.fs.setDoc(ref, state).catch(function(){
-        pushToast("تعذّرت مزامنة هذا التغيير. تم حفظه على هذا الجهاز فقط حالياً.");
-      });
-    }, 400);
+    var tripToSave = trip;
+    saveDebounceTimer = setTimeout(function(){ persistTrip(tripToSave); }, 400);
   }
 
   function mutate(fn){
@@ -1162,30 +1204,34 @@
     return '<div class="overlay lightbox-overlay" data-action="close-lightbox">' +
       '<div class="lightbox-box">' +
         '<button type="button" class="close-x lightbox-close" data-action="close-lightbox" aria-label="إغلاق">&times;</button>' +
-        '<img src="' + ui.lightbox.url + '" alt="' + esc(ui.lightbox.name) + '">' +
+        '<img src="' + ui.lightbox.dataUrl + '" alt="' + esc(ui.lightbox.name) + '">' +
       '</div>' +
     '</div>';
   }
 
-  // Attachments are Firebase Storage download URLs (plain https:// links),
-  // so no data:/blob: navigation workaround is needed here.
   function viewAttachment(a){
     if (!a) return;
     var isImage = (a.type || "").indexOf("image/") === 0;
     if (isImage){
-      ui.lightbox = { url: a.url, name: a.name };
+      ui.lightbox = { dataUrl: a.dataUrl, name: a.name };
       render();
       return;
     }
-    window.open(a.url, "_blank");
-  }
-
-  // Best-effort cleanup of an attachment's Storage object; failures are
-  // silently ignored (e.g. offline) — an orphaned file costs storage
-  // quota, nothing else, and isn't worth surfacing to the user.
-  function deleteAttachmentFile(a){
-    if (!a || !a.path || !fb.storage) return;
-    fb.mods.storage.deleteObject(fb.mods.storage.ref(fb.storage, a.path)).catch(function(){});
+    // Non-image files (e.g. PDFs): browsers block top-level navigation to
+    // data: URLs, so convert to a blob: URL first and open that in a new tab.
+    try {
+      var parts = a.dataUrl.split(",");
+      var mimeMatch = /^data:([^;]+)/.exec(parts[0]);
+      var mime = mimeMatch ? mimeMatch[1] : "application/octet-stream";
+      var byteChars = atob(parts[1]);
+      var bytes = new Uint8Array(byteChars.length);
+      for (var i = 0; i < byteChars.length; i++){ bytes[i] = byteChars.charCodeAt(i); }
+      var blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
+      window.open(blobUrl, "_blank");
+      setTimeout(function(){ URL.revokeObjectURL(blobUrl); }, 60000);
+    } catch (err){
+      pushToast("تعذّر فتح المرفق.");
+    }
   }
 
   // ---------- statistics ----------
@@ -1287,7 +1333,7 @@
       var isImage = (a.type || "").indexOf("image/") === 0;
       return '<div class="attachment-chip">' +
         '<button type="button" class="attachment-link" data-action="view-attachment" data-id="' + a.id + '" title="' + esc(a.name) + ' (فتح للمعاينة)">' +
-          (isImage ? '<img src="' + a.url + '" alt="">' : '<span class="attachment-file-icon">📄</span>') +
+          (isImage ? '<img src="' + a.dataUrl + '" alt="">' : '<span class="attachment-file-icon">📄</span>') +
           '<span class="attachment-name">' + esc(a.name) + '</span>' +
         '</button>' +
         (readOnly ? '' : '<button type="button" class="attachment-remove" data-action="remove-attachment" data-id="' + a.id + '" aria-label="إزالة المرفق">&times;</button>') +
@@ -1429,7 +1475,13 @@
     if (action === "import-local"){
       var importedState = ui.pendingLocalImport;
       ui.pendingLocalImport = null;
-      mutate(function(){ state.trips = importedState.trips.concat(state.trips); });
+      // Each imported trip is its own Firestore document — write them
+      // directly rather than through mutate()/persist(), which only ever
+      // saves the single currently-open trip.
+      state.trips = importedState.trips.concat(state.trips);
+      saveLocal();
+      render();
+      importedState.trips.forEach(persistTrip);
       return;
     }
 
@@ -1450,23 +1502,19 @@
     }
     if (action === "remove-attachment"){
       var aid = actionEl.getAttribute("data-id");
-      var removedAtt = ui.pendingAttachments.find(function(a){ return a.id === aid; });
       var draftR = captureExpenseDraft();
       ui.pendingAttachments = ui.pendingAttachments.filter(function(a){ return a.id !== aid; });
       render();
       restoreExpenseDraft(draftR);
-      deleteAttachmentFile(removedAtt);
       return;
     }
     if (action === "delete-expense"){
       var did = actionEl.getAttribute("data-id");
       if (!confirm("حذف هذا المصروف؟")) return;
-      var deletedExp = trip.expenses.find(function(x){ return x.id === did; });
       mutate(function(){
         trip.expenses = trip.expenses.filter(function(x){ return x.id !== did; });
       });
       closeModal();
-      if (deletedExp && deletedExp.attachments) deletedExp.attachments.forEach(deleteAttachmentFile);
       return;
     }
     if (action === "remove-person"){
@@ -1694,30 +1742,29 @@
       var files = Array.prototype.slice.call(fileInput.files || []);
       var accepted = [];
       var tooBig = 0;
+      var overBudget = 0;
+      var runningTotal = tripAttachmentBytes(ui.editingExpenseId);
       files.forEach(function(f){
         if (f.size > MAX_ATTACHMENT_BYTES){ tooBig++; return; }
+        var estBase64Bytes = Math.ceil(f.size * 4 / 3);
+        if (runningTotal + estBase64Bytes > TRIP_ATTACHMENTS_BUDGET_BYTES){ overBudget++; return; }
+        runningTotal += estBase64Bytes;
         accepted.push(f);
       });
-      if (tooBig > 0){ pushToast("تم تجاهل " + tooBig + " ملف(ات) — الحجم الأقصى 5 ميجابايت لكل مرفق."); }
+      if (tooBig > 0){ pushToast("تم تجاهل " + tooBig + " ملف(ات) — الحجم الأقصى 250 كيلوبايت لكل مرفق (بدون اشتراك مدفوع بفايربيس، المرفقات تُحفظ داخل بيانات الرحلة مباشرة)."); }
+      if (overBudget > 0){ pushToast("تم تجاهل " + overBudget + " ملف(ات) — وصلت رحلتك للحد الأقصى من حجم المرفقات."); }
       if (!accepted.length) return;
-      if (!ui.authUser || !fb.storage){ pushToast("سجّل الدخول أولاً لرفع المرفقات."); return; }
       var draftF = captureExpenseDraft();
-      var uidAtUpload = ui.authUser.uid;
       Promise.all(accepted.map(function(f){
-        var attId = uid();
-        var path = "users/" + uidAtUpload + "/" + trip.id + "/" + attId + "-" + f.name;
-        var sref = fb.mods.storage.ref(fb.storage, path);
-        return fb.mods.storage.uploadBytes(sref, f).then(function(){
-          return fb.mods.storage.getDownloadURL(sref);
-        }).then(function(url){
-          return { id: attId, name: f.name, type: f.type, size: f.size, url: url, path: path };
+        return readFileAsDataURL(f).then(function(dataUrl){
+          return { id: uid(), name: f.name, type: f.type, size: f.size, dataUrl: dataUrl };
         });
       })).then(function(items){
         items.forEach(function(it){ ui.pendingAttachments.push(it); });
         render();
         restoreExpenseDraft(draftF);
       }).catch(function(){
-        pushToast("تعذّر رفع أحد المرفقات.");
+        pushToast("تعذّرت قراءة أحد الملفات.");
       });
     }
   });
@@ -1733,50 +1780,56 @@
   }
 
   // ---------- boot ----------
-  function boot(initialState){
-    state = initialState || {};
+  function normalizeTrip(t){
+    if (!t.people) t.people = [];
+    if (!t.expenses) t.expenses = [];
+    if (!t.settlements) t.settlements = [];
+    if (!t.currencySymbol) t.currencySymbol = "ر.س";
+    if (!t.tripName) t.tripName = "رحلة بلا عنوان";
+    if (!t.createdAt) t.createdAt = Date.now();
+    if (!t.startDate) t.startDate = todayISO();
+    if (!t.exchangeRates) t.exchangeRates = {};
+    return t;
+  }
 
-    // Migrate the old single-trip document shape (fields at the top level)
-    // into the new { trips: [...] } shape, preserving existing data.
-    if (!Array.isArray(state.trips)){
-      var hasLegacyTrip = state.tripName !== undefined || state.people !== undefined || state.expenses !== undefined;
-      state = hasLegacyTrip ? { trips: [{
-        id: uid(),
-        tripName: state.tripName || "رحلة بلا عنوان",
-        currencySymbol: state.currencySymbol || "ر.س",
-        people: state.people || [],
-        expenses: state.expenses || [],
-        settlements: state.settlements || [],
-        createdAt: Date.now()
-      }] } : { trips: [] };
-    }
+  // Reads this browser's pre-accounts localStorage blob, if any, migrating
+  // the very first (single-trip, pre-{trips:[...]}) shape if needed. Used
+  // only to offer a one-time import into a freshly signed-in account —
+  // boot() itself only ever receives already-well-shaped trip documents
+  // straight from Firestore.
+  function readLegacyLocalState(){
+    var raw = null;
+    try { raw = JSON.parse(localStorage.getItem("tripLedgerState")); } catch(e){}
+    if (!raw) return null;
+    if (Array.isArray(raw.trips)) return { trips: raw.trips.map(normalizeTrip) };
+    var hasLegacyTrip = raw.tripName !== undefined || raw.people !== undefined || raw.expenses !== undefined;
+    if (!hasLegacyTrip) return null;
+    return { trips: [normalizeTrip({
+      id: uid(),
+      tripName: raw.tripName,
+      currencySymbol: raw.currencySymbol,
+      people: raw.people,
+      expenses: raw.expenses,
+      settlements: raw.settlements,
+      createdAt: Date.now()
+    })] };
+  }
 
-    state.trips.forEach(function(t){
-      if (!t.people) t.people = [];
-      if (!t.expenses) t.expenses = [];
-      if (!t.settlements) t.settlements = [];
-      if (!t.currencySymbol) t.currencySymbol = "ر.س";
-      if (!t.tripName) t.tripName = "رحلة بلا عنوان";
-      if (!t.createdAt) t.createdAt = Date.now();
-      if (!t.startDate) t.startDate = todayISO();
-      if (!t.exchangeRates) t.exchangeRates = {};
-    });
-
+  function boot(trips){
+    state = { trips: (trips || []).map(normalizeTrip) };
     render();
   }
 
   // ---------- boot: Firebase Auth + Firestore ----------
+  // Each trip is its own document under users/{uid}/trips — listening on
+  // the collection (rather than a single per-user document) gives live
+  // multi-device sync without any one document growing unbounded as trips
+  // accumulate.
   function loadUserState(uidVal){
-    var ref = fb.mods.fs.doc(fb.db, "users", uidVal);
-    fb.mods.fs.onSnapshot(ref, function(snap){
-      if (snap.exists()){
-        boot(snap.data());
-        maybeOfferLocalImport();
-      } else {
-        // first sign-in for this account: seed an empty document
-        boot(JSON.parse(JSON.stringify(DEFAULT_STATE)));
-        fb.mods.fs.setDoc(ref, state).then(maybeOfferLocalImport);
-      }
+    var col = fb.mods.fs.collection(fb.db, "users", uidVal, "trips");
+    fb.mods.fs.onSnapshot(col, function(snap){
+      boot(snap.docs.map(function(d){ return d.data(); }));
+      maybeOfferLocalImport();
     }, function(){
       pushToast("تعذّر تحميل بياناتك من الخادم.");
     });
@@ -1787,9 +1840,8 @@
   // them once rather than silently shadowing them.
   function maybeOfferLocalImport(){
     if (state.trips && state.trips.length > 0) return;
-    var local = null;
-    try { local = JSON.parse(localStorage.getItem("tripLedgerState")); } catch(e){}
-    if (local && Array.isArray(local.trips) && local.trips.length > 0){
+    var local = readLegacyLocalState();
+    if (local && local.trips.length > 0){
       ui.pendingLocalImport = local;
       render();
     }
