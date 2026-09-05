@@ -225,7 +225,15 @@
   .btn-ghost[disabled]:hover{ background:transparent; color:var(--ink); }
 
   /* ---------- ledger ---------- */
+  .filter-bar{
+    display:flex; flex-wrap:wrap; align-items:center; gap:.5rem;
+    padding:.75rem 1.25rem; border-bottom:1px solid var(--rule);
+  }
+  .filter-bar select{ width:auto; min-width:9rem; }
+  .filter-bar input[type=date]{ width:auto; }
+  .filter-sep{ font-size:.82rem; color:var(--ink-soft); }
   .empty{ padding:2.2rem 1rem; text-align:center; color:var(--ink-soft); }
+  .empty .btn{ margin-top:.4rem; }
   .empty h3{ font-size:1.1rem; margin-bottom:.35rem; color:var(--ink); }
   .empty p{ margin:0 0 1rem; font-size:.9rem; }
 
@@ -599,7 +607,8 @@
     pendingJoinPreview: null, // { tripName, personName } shown on the auth screen before signing up
     pendingJoinTripId: null,  // set once the invite is accepted; navigates into the trip as soon as it appears via sync
     stateLoadError: '',      // set if the Firestore trips listener itself failed (e.g. a rules/permission problem)
-    inviteResult: null        // { link, text } shown in a modal right after an invite is created
+    inviteResult: null,       // { link, text } shown in a modal right after an invite is created
+    expenseFilter: { category: '', from: '', to: '' } // view-only filter for the expense list, not persisted
   };
 
   // Attachments are embedded as base64 directly in each trip's Firestore
@@ -1089,22 +1098,68 @@
     return '<div class="layout">' + renderLedgerCard() + renderSidebar() + '</div>';
   }
 
+  // Category filter option that stands for "expenses left with no category
+  // typed in" — distinct from an empty string, which means "no filter".
+  var UNCATEGORIZED_FILTER = "__uncategorized__";
+
+  function filterExpenses(list){
+    var f = ui.expenseFilter;
+    return list.filter(function(e){
+      if (f.category === UNCATEGORIZED_FILTER){ if (e.category) return false; }
+      else if (f.category && e.category !== f.category) return false;
+      if (f.from && (e.date || "") < f.from) return false;
+      if (f.to && (e.date || "") > f.to) return false;
+      return true;
+    });
+  }
+
+  function renderExpenseFilterBar(){
+    var f = ui.expenseFilter;
+    var categories = Array.from(new Set(
+      trip.expenses.map(function(e){ return e.category || ""; }).filter(function(c){ return c; })
+    )).sort(function(a, b){ return a.localeCompare(b, "ar"); });
+    var hasUncategorized = trip.expenses.some(function(e){ return !e.category; });
+    var active = !!(f.category || f.from || f.to);
+
+    var catOptions = '<option value="">كل التصنيفات</option>' +
+      categories.map(function(c){
+        return '<option value="' + esc(c) + '"' + (f.category === c ? " selected" : "") + '>' + esc(c) + '</option>';
+      }).join("") +
+      (hasUncategorized ? '<option value="' + UNCATEGORIZED_FILTER + '"' + (f.category === UNCATEGORIZED_FILTER ? " selected" : "") + '>بدون تصنيف</option>' : "");
+
+    return '<div class="filter-bar">' +
+      '<select data-field="filterCategory" aria-label="فلترة حسب التصنيف">' + catOptions + '</select>' +
+      '<span class="filter-sep">من</span>' +
+      '<input type="date" data-field="filterDateFrom" value="' + esc(f.from) + '" aria-label="من تاريخ">' +
+      '<span class="filter-sep">إلى</span>' +
+      '<input type="date" data-field="filterDateTo" value="' + esc(f.to) + '" aria-label="إلى تاريخ">' +
+      (active ? '<button type="button" class="btn-text" data-action="clear-expense-filter">مسح الفلترة</button>' : "") +
+    '</div>';
+  }
+
   function renderLedgerCard(){
     var head = '<div class="card-head"><h2>المصاريف</h2>' +
       (!readOnly ? '<button class="btn btn-primary btn-small" data-action="open-add-expense" ' + (trip.people.length < 1 ? "disabled" : "") + '>إضافة مصروف</button>' : '') +
       '</div>';
 
-    var body;
     if (trip.expenses.length === 0){
-      body = '<div class="empty"><h3>لا توجد مصاريف بعد</h3><p>' +
+      var empty = '<div class="empty"><h3>لا توجد مصاريف بعد</h3><p>' +
         (trip.people.length === 0 ? "أضف رفاق الرحلة أولاً، ثم سجّل أول مصروف." : "سجّل أول مصروف لبدء الدفتر.") +
         '</p></div>';
-    } else {
-      var rows = trip.expenses.slice().sort(function(a,b){ return (b.date||"").localeCompare(a.date||"") || b.createdAt - a.createdAt; })
-        .map(renderExpenseRow).join("");
-      body = rows;
+      return '<div><div class="card">' + head + empty + '</div>' + renderPeopleCard() + '</div>';
     }
-    return '<div><div class="card">' + head + body + '</div>' + renderPeopleCard() + '</div>';
+
+    var filterBar = renderExpenseFilterBar();
+    var filtered = filterExpenses(trip.expenses);
+    var body;
+    if (filtered.length === 0){
+      body = '<div class="empty"><h3>لا توجد مصاريف مطابقة للفلترة</h3><p>جرّب تغيير التصنيف أو نطاق التاريخ.</p>' +
+        '<button type="button" class="btn btn-ghost btn-small" data-action="clear-expense-filter">مسح الفلترة</button></div>';
+    } else {
+      body = filtered.slice().sort(function(a,b){ return (b.date||"").localeCompare(a.date||"") || b.createdAt - a.createdAt; })
+        .map(renderExpenseRow).join("");
+    }
+    return '<div><div class="card">' + head + filterBar + body + '</div>' + renderPeopleCard() + '</div>';
   }
 
   function renderExpenseRow(e){
@@ -1706,10 +1761,15 @@
     if (action === "open-trip"){
       var tid = actionEl.getAttribute("data-id");
       ui.view = "trip"; ui.currentTripId = tid;
+      ui.expenseFilter = { category: '', from: '', to: '' };
       render(); return;
     }
     if (action === "go-home"){
       ui.view = "home"; ui.currentTripId = null; ui.modal = null;
+      render(); return;
+    }
+    if (action === "clear-expense-filter"){
+      ui.expenseFilter = { category: '', from: '', to: '' };
       render(); return;
     }
   });
@@ -1891,6 +1951,19 @@
         if (val !== trip.currencySymbol) mutate(function(){ trip.currencySymbol = val; });
         else render();
       }
+    }
+
+    if (e.target.matches('[data-field="filterCategory"]')){
+      ui.expenseFilter.category = e.target.value;
+      render();
+    }
+    if (e.target.matches('[data-field="filterDateFrom"]')){
+      ui.expenseFilter.from = e.target.value;
+      render();
+    }
+    if (e.target.matches('[data-field="filterDateTo"]')){
+      ui.expenseFilter.to = e.target.value;
+      render();
     }
 
     if (e.target.matches('input[type="file"][data-field="attachment"]')){
