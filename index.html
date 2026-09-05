@@ -312,11 +312,11 @@
   /* ---------- forms ---------- */
   label{ display:block; font-size:.78rem; font-weight:600; color:var(--ink-soft); margin-bottom:.3rem; }
   .field{ margin-bottom:.9rem; }
-  input[type=text], input[type=number], input[type=date], select{
+  input[type=text], input[type=number], input[type=date], input[type=email], input[type=password], select{
     width:100%; background:var(--paper); border:1px solid var(--rule-strong); border-radius:7px;
     padding:.55rem .65rem; color:var(--ink);
   }
-  input[type=text]:focus, input[type=number]:focus, input[type=date]:focus, select:focus{
+  input[type=text]:focus, input[type=number]:focus, input[type=date]:focus, input[type=email]:focus, input[type=password]:focus, select:focus{
     outline:none; border-color:var(--ink); box-shadow:0 0 0 3px color-mix(in srgb, var(--ink) 12%, transparent);
   }
   .row2{ display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
@@ -368,6 +368,27 @@
   }
   .attachment-add-btn:hover{ border-color:var(--ink); color:var(--ink); }
 
+  /* ---------- auth ---------- */
+  .auth-wrap{
+    min-height:100vh; display:flex; align-items:center; justify-content:center; padding:1.5rem; background:var(--paper);
+  }
+  .auth-card{
+    width:100%; max-width:22rem; background:var(--card); border:1px solid var(--rule-strong); border-radius:12px;
+    box-shadow:var(--shadow); padding:1.5rem;
+  }
+  .auth-title{ font-size:1.4rem; margin:.3rem 0 1rem; }
+  .auth-error{
+    background:color-mix(in srgb, #d33 12%, transparent); border:1px solid color-mix(in srgb, #d33 35%, transparent);
+    color:#a12; border-radius:7px; padding:.55rem .7rem; font-size:.85rem; margin-bottom:.9rem;
+  }
+  .auth-submit-btn{ width:100%; margin-top:.3rem; }
+  .auth-toggle{
+    display:block; width:100%; text-align:center; background:none; border:none; margin-top:1rem;
+    font-size:.83rem; color:var(--ink-soft); cursor:pointer; text-decoration:underline;
+  }
+  .auth-toggle:hover{ color:var(--ink); }
+  .account-email{ font-size:.8rem; color:var(--ink-soft); max-width:12rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
   /* ---------- people list ---------- */
   .people-row{ display:flex; align-items:center; gap:.55rem; padding:.4rem 0; }
   .people-row .name{ flex:1; font-size:.9rem; }
@@ -408,6 +429,63 @@
 <script>
 (function(){
   "use strict";
+
+  // ---------- Firebase ----------
+  // Replace these placeholder values with your own project's config:
+  // Firebase console → Project settings → General → "Your apps" → Web app.
+  // This config is safe to ship in client-side code — it only identifies
+  // the project; access is controlled by the Firestore/Storage security
+  // rules (see firestore.rules / storage.rules in the repo), not by
+  // keeping this object secret.
+  var firebaseConfig = {
+    apiKey: "REPLACE_ME",
+    authDomain: "REPLACE_ME.firebaseapp.com",
+    projectId: "REPLACE_ME",
+    storageBucket: "REPLACE_ME.appspot.com",
+    messagingSenderId: "REPLACE_ME",
+    appId: "REPLACE_ME"
+  };
+  var FIREBASE_SDK_VERSION = "10.14.1";
+  var fb = { auth: null, db: null, storage: null, mods: null, ready: null };
+
+  // Dynamic import() works in a plain classic <script> (no type="module"
+  // needed), so the rest of the app can stay exactly the single
+  // non-module IIFE it already is.
+  function loadFirebase(){
+    if (fb.ready) return fb.ready;
+    var base = "https://www.gstatic.com/firebasejs/" + FIREBASE_SDK_VERSION + "/";
+    fb.ready = Promise.all([
+      import(base + "firebase-app.js"),
+      import(base + "firebase-auth.js"),
+      import(base + "firebase-firestore.js"),
+      import(base + "firebase-storage.js")
+    ]).then(function(mods){
+      var appMod = mods[0], authMod = mods[1], fsMod = mods[2], storageMod = mods[3];
+      var app = appMod.initializeApp(firebaseConfig);
+      fb.auth = authMod.getAuth(app);
+      fb.db = fsMod.getFirestore(app);
+      fb.storage = storageMod.getStorage(app);
+      fb.mods = { auth: authMod, fs: fsMod, storage: storageMod };
+      return fb;
+    });
+    return fb.ready;
+  }
+
+  function authErrorMessage(err){
+    var code = err && err.code;
+    var map = {
+      "auth/invalid-email": "البريد الإلكتروني غير صالح.",
+      "auth/user-disabled": "تم تعطيل هذا الحساب.",
+      "auth/user-not-found": "لا يوجد حساب بهذا البريد.",
+      "auth/wrong-password": "كلمة المرور غير صحيحة.",
+      "auth/invalid-credential": "بيانات الدخول غير صحيحة.",
+      "auth/email-already-in-use": "هذا البريد مستخدم من قبل.",
+      "auth/weak-password": "كلمة المرور ضعيفة — استخدم 6 أحرف على الأقل.",
+      "auth/too-many-requests": "محاولات كثيرة جداً — حاول لاحقاً.",
+      "auth/network-request-failed": "تعذّر الاتصال بالشبكة."
+    };
+    return (code && map[code]) || "حدث خطأ غير متوقع. حاول مرة أخرى.";
+  }
 
   var DEFAULT_STATE = {
     trips: []
@@ -485,8 +563,7 @@
 
   var state = null;
   var trip = null;      // the currently open trip object (a reference into state.trips), or null on the home page
-  var artifactApi = null;
-  var readOnly = false;
+  var readOnly = false; // no longer ever set to true (was tied to a removed hosting-specific sync mode); kept as a no-op flag other render functions already check
 
   // ephemeral UI state
   var ui = {
@@ -500,19 +577,17 @@
     currencyCustom: false,
     pendingAttachments: [],  // attachments staged in the open add/edit-expense modal
     convertOpen: {},         // which "convert to riyal" panels are expanded, keyed by "currency|from|to"
-    lightbox: null           // { dataUrl, name } of the attachment image currently being previewed
+    lightbox: null,          // { url, name } of the attachment image currently being previewed
+    authUser: null,          // { uid, email } once signed in via Firebase Auth, else null
+    authMode: 'login',       // 'login' | 'signup'
+    authError: '',
+    authBusy: false,
+    authEmailDraft: '',      // preserves the typed email across re-renders (e.g. after a failed attempt)
+    bootError: '',           // set if Firebase itself failed to load (offline / blocked / misconfigured)
+    pendingLocalImport: null // local {trips:[...]} found in this browser's storage, offered for import after first sign-in
   };
 
   var MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024; // 5MB per file
-
-  function readFileAsDataURL(file){
-    return new Promise(function(resolve, reject){
-      var reader = new FileReader();
-      reader.onload = function(){ resolve(reader.result); };
-      reader.onerror = function(){ reject(reader.error); };
-      reader.readAsDataURL(file);
-    });
-  }
 
   // The add/edit-expense modal is a plain uncontrolled form — its fields aren't
   // tracked in `ui`, so a full re-render (e.g. to show a newly attached file)
@@ -693,6 +768,11 @@
   }
 
   // ---------- persistence ----------
+  // Firestore (one document per signed-in user, at users/{uid}) is the
+  // source of truth; localStorage is kept only as an offline read cache so
+  // a reload works mid-flaky-connection.
+  var saveDebounceTimer = null;
+
   function saveLocal(){
     try { localStorage.setItem("tripLedgerState", JSON.stringify(state)); } catch(e){}
   }
@@ -707,39 +787,32 @@
     }, 3200);
   }
 
-  function persist(previousStateJSON){
+  function persist(){
     saveLocal();
-    if (!artifactApi){ render(); return; }
-    artifactApi.publish({ "data.json": JSON.stringify(state) }).then(function(){
-      // this view keeps running with current state; nothing else to do
-    }).catch(function(err){
-      var code = err && err.code;
-      if (code === "conflict"){
-        pushToast("قام شخص آخر بتحديث هذه الرحلة — يتم التحديث…");
-        setTimeout(function(){ window.location.reload(); }, 900);
-        return;
-      }
-      if (code === "not_writer" || code === "not_granted" || code === "not_declared" || code === "capability_disabled"){
-        readOnly = true;
-        if (previousStateJSON) state = JSON.parse(previousStateJSON);
-        pushToast("هذه الرحلة للعرض فقط على جهازك — لا يمكن حفظ التغييرات.");
-        render();
-        return;
-      }
-      pushToast("تعذّرت مزامنة هذا التغيير. تم حفظه على هذا الجهاز فقط حالياً.");
-    });
+    render();
+    if (!ui.authUser || !fb.db) return;
+    if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
+    var uidAtSave = ui.authUser.uid;
+    saveDebounceTimer = setTimeout(function(){
+      var ref = fb.mods.fs.doc(fb.db, "users", uidAtSave);
+      fb.mods.fs.setDoc(ref, state).catch(function(){
+        pushToast("تعذّرت مزامنة هذا التغيير. تم حفظه على هذا الجهاز فقط حالياً.");
+      });
+    }, 400);
   }
 
   function mutate(fn){
-    var prev = JSON.stringify(state);
     fn();
-    render();
-    persist(prev);
+    persist();
   }
 
   // ---------- rendering ----------
   function render(){
     var app = document.getElementById("app");
+
+    if (ui.bootError){ app.innerHTML = renderBootError(); return; }
+    if (!ui.authUser){ app.innerHTML = renderAuthScreen(); return; }
+    if (!state){ app.innerHTML = renderAuthLoading(); return; }
 
     if (ui.view === "trip"){
       trip = state.trips.find(function(t){ return t.id === ui.currentTripId; });
@@ -748,16 +821,65 @@
 
     if (ui.view !== "trip"){
       trip = null;
-      app.innerHTML = renderHome() + renderModal() + renderLightbox() + renderReadonlyBanner() + renderToasts();
+      app.innerHTML = renderHome() + renderModal() + renderLightbox() + renderImportPrompt() + renderReadonlyBanner() + renderToasts();
       return;
     }
 
-    app.innerHTML = renderHeader() + renderReadonlyBanner() + renderLayout() + renderModal() + renderLightbox() + renderToasts();
+    app.innerHTML = renderHeader() + renderReadonlyBanner() + renderLayout() + renderModal() + renderLightbox() + renderImportPrompt() + renderToasts();
   }
 
   function renderReadonlyBanner(){
     if (!readOnly) return "";
     return '<div class="readonly-banner">للعرض فقط — أنت تشاهد هذه الرحلة، لكن لن يتم حفظ أي تغييرات.</div>';
+  }
+
+  // ---------- auth ----------
+  function renderAuthScreen(){
+    var isSignup = ui.authMode === "signup";
+    return '<div class="auth-wrap">' +
+      '<div class="auth-card">' +
+        '<div class="eyebrow">دفتر الرحلة</div>' +
+        '<h1 class="auth-title">' + (isSignup ? "إنشاء حساب" : "تسجيل الدخول") + '</h1>' +
+        (ui.authError ? '<p class="auth-error">' + esc(ui.authError) + '</p>' : '') +
+        '<form data-action="auth-submit">' +
+          '<div class="field"><label>البريد الإلكتروني</label><input type="email" name="email" required autocomplete="email" value="' + esc(ui.authEmailDraft) + '" placeholder="name@example.com"></div>' +
+          '<div class="field"><label>كلمة المرور</label><input type="password" name="password" required minlength="6" autocomplete="' + (isSignup ? "new-password" : "current-password") + '" placeholder="6 أحرف على الأقل"></div>' +
+          '<button type="submit" class="btn btn-primary auth-submit-btn" ' + (ui.authBusy ? "disabled" : "") + '>' +
+            (ui.authBusy ? "جارٍ التنفيذ…" : (isSignup ? "إنشاء الحساب" : "تسجيل الدخول")) +
+          '</button>' +
+        '</form>' +
+        '<button type="button" class="auth-toggle" data-action="toggle-auth-mode">' +
+          (isSignup ? "عندك حساب؟ سجّل الدخول" : "ما عندك حساب؟ أنشئ واحداً") +
+        '</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderAuthLoading(){
+    return '<div class="auth-wrap"><div class="auth-card"><div class="eyebrow">دفتر الرحلة</div><p>جارٍ التحميل…</p></div></div>';
+  }
+
+  function renderBootError(){
+    return '<div class="auth-wrap"><div class="auth-card">' +
+      '<div class="eyebrow">دفتر الرحلة</div>' +
+      '<h1 class="auth-title">تعذّر الاتصال</h1>' +
+      '<p class="auth-error">' + esc(ui.bootError) + '</p>' +
+      '<button type="button" class="btn btn-primary" data-action="retry-boot">إعادة المحاولة</button>' +
+    '</div></div>';
+  }
+
+  function renderImportPrompt(){
+    if (!ui.pendingLocalImport) return "";
+    return '<div class="overlay" data-action="dismiss-import">' +
+      '<div class="modal" role="dialog" aria-modal="true" aria-label="استيراد بيانات محلية">' +
+        '<div class="modal-head"><h2>عندك رحلات محفوظة على هذا الجهاز</h2></div>' +
+        '<div class="modal-body"><p>لقينا رحلات محفوظة محلياً على هذا المتصفح من قبل تفعيل الحسابات. تحب تربطها بحسابك؟</p></div>' +
+        '<div class="modal-foot">' +
+          '<button type="button" class="btn btn-ghost" data-action="dismiss-import">تجاهل</button>' +
+          '<button type="button" class="btn btn-primary" data-action="import-local">استيراد</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
   }
 
   // ---------- home page (trip list) ----------
@@ -776,8 +898,10 @@
             '<h1 class="home-title">رحلاتي</h1>' +
           '</div>' +
           '<div style="display:flex; align-items:center; gap:.75rem;">' +
+            (ui.authUser ? '<span class="account-email" title="' + esc(ui.authUser.email) + '">' + esc(ui.authUser.email) + '</span>' : '') +
             '<button type="button" class="theme-toggle" data-action="toggle-theme">' + (getTheme() === "dark" ? "الوضع الفاتح" : "الوضع الداكن") + '</button>' +
             (!readOnly ? '<button type="button" class="btn btn-primary" data-action="add-trip">+ رحلة جديدة</button>' : '') +
+            (ui.authUser ? '<button type="button" class="theme-toggle" data-action="signout">تسجيل خروج</button>' : '') +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -1038,34 +1162,30 @@
     return '<div class="overlay lightbox-overlay" data-action="close-lightbox">' +
       '<div class="lightbox-box">' +
         '<button type="button" class="close-x lightbox-close" data-action="close-lightbox" aria-label="إغلاق">&times;</button>' +
-        '<img src="' + ui.lightbox.dataUrl + '" alt="' + esc(ui.lightbox.name) + '">' +
+        '<img src="' + ui.lightbox.url + '" alt="' + esc(ui.lightbox.name) + '">' +
       '</div>' +
     '</div>';
   }
 
+  // Attachments are Firebase Storage download URLs (plain https:// links),
+  // so no data:/blob: navigation workaround is needed here.
   function viewAttachment(a){
     if (!a) return;
     var isImage = (a.type || "").indexOf("image/") === 0;
     if (isImage){
-      ui.lightbox = { dataUrl: a.dataUrl, name: a.name };
+      ui.lightbox = { url: a.url, name: a.name };
       render();
       return;
     }
-    // Non-image files (e.g. PDFs): browsers block top-level navigation to
-    // data: URLs, so convert to a blob: URL first and open that in a new tab.
-    try {
-      var parts = a.dataUrl.split(",");
-      var mimeMatch = /^data:([^;]+)/.exec(parts[0]);
-      var mime = mimeMatch ? mimeMatch[1] : "application/octet-stream";
-      var byteChars = atob(parts[1]);
-      var bytes = new Uint8Array(byteChars.length);
-      for (var i = 0; i < byteChars.length; i++){ bytes[i] = byteChars.charCodeAt(i); }
-      var blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
-      window.open(blobUrl, "_blank");
-      setTimeout(function(){ URL.revokeObjectURL(blobUrl); }, 60000);
-    } catch (err){
-      pushToast("تعذّر فتح المرفق.");
-    }
+    window.open(a.url, "_blank");
+  }
+
+  // Best-effort cleanup of an attachment's Storage object; failures are
+  // silently ignored (e.g. offline) — an orphaned file costs storage
+  // quota, nothing else, and isn't worth surfacing to the user.
+  function deleteAttachmentFile(a){
+    if (!a || !a.path || !fb.storage) return;
+    fb.mods.storage.deleteObject(fb.mods.storage.ref(fb.storage, a.path)).catch(function(){});
   }
 
   // ---------- statistics ----------
@@ -1167,7 +1287,7 @@
       var isImage = (a.type || "").indexOf("image/") === 0;
       return '<div class="attachment-chip">' +
         '<button type="button" class="attachment-link" data-action="view-attachment" data-id="' + a.id + '" title="' + esc(a.name) + ' (فتح للمعاينة)">' +
-          (isImage ? '<img src="' + a.dataUrl + '" alt="">' : '<span class="attachment-file-icon">📄</span>') +
+          (isImage ? '<img src="' + a.url + '" alt="">' : '<span class="attachment-file-icon">📄</span>') +
           '<span class="attachment-name">' + esc(a.name) + '</span>' +
         '</button>' +
         (readOnly ? '' : '<button type="button" class="attachment-remove" data-action="remove-attachment" data-id="' + a.id + '" aria-label="إزالة المرفق">&times;</button>') +
@@ -1284,6 +1404,35 @@
     if (action === "close-modal"){ closeModal(); return; }
     if (action === "close-lightbox" && e.target === actionEl){ ui.lightbox = null; render(); return; }
 
+    if (action === "toggle-auth-mode"){
+      ui.authMode = ui.authMode === "signup" ? "login" : "signup";
+      ui.authError = "";
+      render();
+      return;
+    }
+    if (action === "signout"){
+      fb.mods.auth.signOut(fb.auth);
+      return; // onAuthStateChanged drives the rest
+    }
+    if (action === "retry-boot"){
+      ui.bootError = "";
+      render();
+      loadFirebase().then(initAuthListener).catch(function(){
+        ui.bootError = "تعذّر تحميل خدمة الحسابات — تحقّق من اتصال الإنترنت وحاول مرة أخرى.";
+        render();
+      });
+      return;
+    }
+    if (action === "dismiss-import"){
+      ui.pendingLocalImport = null; render(); return;
+    }
+    if (action === "import-local"){
+      var importedState = ui.pendingLocalImport;
+      ui.pendingLocalImport = null;
+      mutate(function(){ state.trips = importedState.trips.concat(state.trips); });
+      return;
+    }
+
     if (action === "open-add-expense"){
       ui.modal = "expense"; ui.editingExpenseId = null; ui.splitType = "equal"; ui.pendingAttachments = []; render(); return;
     }
@@ -1301,19 +1450,23 @@
     }
     if (action === "remove-attachment"){
       var aid = actionEl.getAttribute("data-id");
+      var removedAtt = ui.pendingAttachments.find(function(a){ return a.id === aid; });
       var draftR = captureExpenseDraft();
       ui.pendingAttachments = ui.pendingAttachments.filter(function(a){ return a.id !== aid; });
       render();
       restoreExpenseDraft(draftR);
+      deleteAttachmentFile(removedAtt);
       return;
     }
     if (action === "delete-expense"){
       var did = actionEl.getAttribute("data-id");
       if (!confirm("حذف هذا المصروف؟")) return;
+      var deletedExp = trip.expenses.find(function(x){ return x.id === did; });
       mutate(function(){
         trip.expenses = trip.expenses.filter(function(x){ return x.id !== did; });
       });
       closeModal();
+      if (deletedExp && deletedExp.attachments) deletedExp.attachments.forEach(deleteAttachmentFile);
       return;
     }
     if (action === "remove-person"){
@@ -1366,6 +1519,25 @@
     if (!form) return;
     var action = form.getAttribute("data-action");
     e.preventDefault();
+
+    if (action === "auth-submit"){
+      var afd = new FormData(form);
+      var email = (afd.get("email")||"").toString().trim();
+      var password = (afd.get("password")||"").toString();
+      ui.authEmailDraft = email;
+      if (!email || !password) return;
+      ui.authBusy = true; ui.authError = ""; render();
+      var authFn = ui.authMode === "signup"
+        ? fb.mods.auth.createUserWithEmailAndPassword
+        : fb.mods.auth.signInWithEmailAndPassword;
+      authFn(fb.auth, email, password).catch(function(err){
+        ui.authBusy = false;
+        ui.authError = authErrorMessage(err);
+        render();
+      });
+      // on success onAuthStateChanged fires and takes over rendering
+      return;
+    }
 
     if (action === "add-person"){
       var input = form.querySelector('input[name="name"]');
@@ -1527,17 +1699,25 @@
         accepted.push(f);
       });
       if (tooBig > 0){ pushToast("تم تجاهل " + tooBig + " ملف(ات) — الحجم الأقصى 5 ميجابايت لكل مرفق."); }
+      if (!accepted.length) return;
+      if (!ui.authUser || !fb.storage){ pushToast("سجّل الدخول أولاً لرفع المرفقات."); return; }
       var draftF = captureExpenseDraft();
+      var uidAtUpload = ui.authUser.uid;
       Promise.all(accepted.map(function(f){
-        return readFileAsDataURL(f).then(function(dataUrl){
-          return { id: uid(), name: f.name, type: f.type, size: f.size, dataUrl: dataUrl };
+        var attId = uid();
+        var path = "users/" + uidAtUpload + "/" + trip.id + "/" + attId + "-" + f.name;
+        var sref = fb.mods.storage.ref(fb.storage, path);
+        return fb.mods.storage.uploadBytes(sref, f).then(function(){
+          return fb.mods.storage.getDownloadURL(sref);
+        }).then(function(url){
+          return { id: attId, name: f.name, type: f.type, size: f.size, url: url, path: path };
         });
       })).then(function(items){
         items.forEach(function(it){ ui.pendingAttachments.push(it); });
         render();
         restoreExpenseDraft(draftF);
       }).catch(function(){
-        pushToast("تعذّرت قراءة أحد الملفات.");
+        pushToast("تعذّر رفع أحد المرفقات.");
       });
     }
   });
@@ -1585,15 +1765,57 @@
     render();
   }
 
-  window.claude && window.claude.use ? window.claude.use("artifact").then(function(api){ artifactApi = api; }) : null;
+  // ---------- boot: Firebase Auth + Firestore ----------
+  function loadUserState(uidVal){
+    var ref = fb.mods.fs.doc(fb.db, "users", uidVal);
+    fb.mods.fs.onSnapshot(ref, function(snap){
+      if (snap.exists()){
+        boot(snap.data());
+        maybeOfferLocalImport();
+      } else {
+        // first sign-in for this account: seed an empty document
+        boot(JSON.parse(JSON.stringify(DEFAULT_STATE)));
+        fb.mods.fs.setDoc(ref, state).then(maybeOfferLocalImport);
+      }
+    }, function(){
+      pushToast("تعذّر تحميل بياناتك من الخادم.");
+    });
+  }
 
-  fetch("data.json", { cache: "no-store" }).then(function(r){
-    return r.ok ? r.json() : null;
-  }).catch(function(){ return null; }).then(function(remote){
-    if (remote){ boot(remote); return; }
+  // If this account's cloud data is still empty but this browser already
+  // has trips saved locally from before accounts existed, offer to import
+  // them once rather than silently shadowing them.
+  function maybeOfferLocalImport(){
+    if (state.trips && state.trips.length > 0) return;
     var local = null;
     try { local = JSON.parse(localStorage.getItem("tripLedgerState")); } catch(e){}
-    boot(local || JSON.parse(JSON.stringify(DEFAULT_STATE)));
+    if (local && Array.isArray(local.trips) && local.trips.length > 0){
+      ui.pendingLocalImport = local;
+      render();
+    }
+  }
+
+  function initAuthListener(){
+    fb.mods.auth.onAuthStateChanged(fb.auth, function(user){
+      ui.authBusy = false;
+      ui.authError = "";
+      if (user){
+        ui.authUser = { uid: user.uid, email: user.email };
+        loadUserState(user.uid);
+      } else {
+        ui.authUser = null;
+        ui.authEmailDraft = "";
+        state = null;
+        render();
+      }
+    });
+  }
+
+  loadFirebase().then(function(){
+    initAuthListener();
+  }).catch(function(){
+    ui.bootError = "تعذّر تحميل خدمة الحسابات — تحقّق من اتصال الإنترنت وحاول مرة أخرى.";
+    render();
   });
 
 })();
