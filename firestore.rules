@@ -19,10 +19,16 @@ service cloud.firestore {
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.memberUids.hasOnly([request.auth.uid]);
       allow update: if isMember() || isValidSelfJoin();
-      allow delete: if isMember();
+      // Only the trip's creator ("admin") may delete it outright — every
+      // other member can add/edit/remove expenses and travelers, but not
+      // erase the whole trip's history for everyone.
+      allow delete: if isOwner();
 
       function isMember(){
         return request.auth != null && resource.data.memberUids.hasAny([request.auth.uid]);
+      }
+      function isOwner(){
+        return request.auth != null && resource.data.ownerUid == request.auth.uid;
       }
 
       // A signed-in non-member may add *only their own uid* to

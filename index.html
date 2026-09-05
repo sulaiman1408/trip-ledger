@@ -223,6 +223,9 @@
   .btn[disabled]{ opacity:.4; cursor:not-allowed; }
   .btn[disabled]:hover{ background:var(--ink); color:var(--paper); }
   .btn-ghost[disabled]:hover{ background:transparent; color:var(--ink); }
+  .danger-zone{ border-color:color-mix(in srgb, #d33 35%, var(--rule-strong)); }
+  .danger-zone-btn{ border-color:#d33; color:#a12; }
+  .danger-zone-btn:hover{ background:#d33; color:#fff; border-color:#d33; }
 
   /* ---------- ledger ---------- */
   .filter-bar{
@@ -1348,6 +1351,19 @@
     }).filter(Boolean);
     var settleBody = settleGroups.length === 0 ? '<p class="settle-empty">تمت تسوية الجميع.</p>' : settleGroups.join("");
 
+    // Deleting the whole trip is restricted to whoever created it (also
+    // enforced server-side in firestore.rules) — every other member can
+    // edit expenses/travelers freely, but not erase the trip for everyone.
+    var isOwner = ui.authUser && trip.ownerUid === ui.authUser.uid;
+    var dangerZone = isOwner ? '' +
+      '<div class="card danger-zone" style="margin-top:1.5rem;">' +
+        '<div class="card-head"><h2>منطقة الخطر</h2></div>' +
+        '<div class="card-body">' +
+          '<p style="color:var(--ink-soft); font-size:.85rem; margin-top:0;">حذف الرحلة نهائي ويشمل كل مصاريفها ومسافريها وتسويتها — ولا يقدر أحد استعادتها بعدها.</p>' +
+          '<button type="button" class="btn btn-ghost danger-zone-btn" data-action="delete-trip">حذف الرحلة</button>' +
+        '</div>' +
+      '</div>' : '';
+
     return '' +
     '<div>' +
       '<div class="card">' +
@@ -1358,6 +1374,7 @@
         '<div class="card-head"><h2>التسوية</h2></div>' +
         '<div class="card-body">' + settleBody + '</div>' +
       '</div>' +
+      dangerZone +
     '</div>';
   }
 
@@ -1716,6 +1733,29 @@
         trip.expenses = trip.expenses.filter(function(x){ return x.id !== did; });
       });
       closeModal();
+      return;
+    }
+    if (action === "delete-trip"){
+      // Restricted to the owner in the UI (button only renders for them)
+      // and enforced again server-side by firestore.rules — a joined
+      // member's request to delete would be rejected either way.
+      var tripToDelete = trip;
+      if (!confirm('حذف رحلة "' + tripToDelete.tripName + '" نهائياً؟ يشمل هذا كل مصاريفها ومسافريها وتسويتها، ولا يمكن التراجع.')) return;
+      // Update local state/localStorage and navigate home *before* issuing
+      // the Firestore delete — Firestore can echo a write back through the
+      // live listener almost immediately (its local cache applies writes
+      // before the network round-trip confirms), and if that fires while
+      // localStorage still listed this trip, maybeOfferLocalImport() could
+      // offer to "restore" the trip that's mid-deletion.
+      state.trips = state.trips.filter(function(t){ return t.id !== tripToDelete.id; });
+      saveLocal();
+      ui.view = "home"; ui.currentTripId = null;
+      render();
+      fb.mods.fs.deleteDoc(fb.mods.fs.doc(fb.db, "trips", tripToDelete.id)).then(function(){
+        pushToast('تم حذف رحلة "' + tripToDelete.tripName + '".');
+      }).catch(function(err){
+        pushToast("تعذّر حذف الرحلة" + (err && err.code ? " (" + err.code + ")" : "") + ".");
+      });
       return;
     }
     if (action === "share-invite"){
