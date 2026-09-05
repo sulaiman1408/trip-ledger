@@ -391,7 +391,12 @@
     font-size:.83rem; color:var(--ink-soft); cursor:pointer; text-decoration:underline;
   }
   .auth-toggle:hover{ color:var(--ink); }
-  .account-email{ font-size:.8rem; color:var(--ink-soft); max-width:12rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .header-actions{ display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; justify-content:flex-end; }
+  .account-email{
+    font-size:.8rem; color:var(--ink-soft); max-width:12rem; overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap; display:none; /* the email is a nicety — hidden on narrow phones to leave room for the buttons */
+  }
+  @media (min-width:640px){ .account-email{ display:inline-block; } }
 
   /* ---------- people list ---------- */
   .people-row{ display:flex; align-items:center; gap:.55rem; padding:.4rem 0; }
@@ -976,7 +981,7 @@
             '<div class="eyebrow">دفتر الرحلة</div>' +
             '<h1 class="home-title">رحلاتي</h1>' +
           '</div>' +
-          '<div style="display:flex; align-items:center; gap:.75rem;">' +
+          '<div class="header-actions">' +
             (ui.authUser ? '<span class="account-email" title="' + esc(ui.authUser.email) + '">' + esc(ui.authUser.email) + '</span>' : '') +
             '<button type="button" class="theme-toggle" data-action="toggle-theme">' + (getTheme() === "dark" ? "الوضع الفاتح" : "الوضع الداكن") + '</button>' +
             (!readOnly ? '<button type="button" class="btn btn-primary" data-action="add-trip">+ رحلة جديدة</button>' : '') +
