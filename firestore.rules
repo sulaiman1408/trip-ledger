@@ -2,14 +2,56 @@ rules_version = '2';
 
 // Paste this into: Firebase console → Firestore Database → Rules.
 //
-// Each signed-in user has their own trips subcollection, at
-// users/{uid}/trips/{tripId} — one document per trip. Only that user
-// (proven by their Firebase Auth uid) may read or write any document under
-// their own users/{uid} path — nobody else, authenticated or not.
+// Trips live in a top-level `trips` collection (not nested under a user)
+// so more than one account can share one — every doc carries a
+// memberUids array of every account allowed to read/write it.
+//
+// Invites live in a separate top-level `invites` collection, keyed by a
+// long, unguessable random token (see generateInviteToken() in
+// index.html). Holding the exact token is what proves you were invited —
+// the same trust model as an "anyone with this link" share link.
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{uid}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+
+    match /trips/{tripId} {
+      allow read: if isMember();
+      allow create: if request.auth != null
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.memberUids.hasOnly([request.auth.uid]);
+      allow update: if isMember() || isValidSelfJoin();
+      allow delete: if isMember();
+
+      function isMember(){
+        return request.auth != null && resource.data.memberUids.hasAny([request.auth.uid]);
+      }
+
+      // A signed-in non-member may add *only their own uid* to
+      // memberUids — and only by presenting, in the same write, the
+      // token of a matching, unused invite for this exact trip.
+      function isValidSelfJoin(){
+        return request.auth != null
+          && !isMember()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids', 'pendingJoinToken'])
+          && request.resource.data.memberUids.hasAll(resource.data.memberUids)
+          && request.resource.data.memberUids.hasOnly(resource.data.memberUids.concat([request.auth.uid]))
+          && get(/databases/$(database)/documents/invites/$(request.resource.data.pendingJoinToken)).data.tripId == tripId
+          && get(/databases/$(database)/documents/invites/$(request.resource.data.pendingJoinToken)).data.used == false;
+      }
+    }
+
+    match /invites/{token} {
+      // Readable by anyone who holds the exact token (there is no way to
+      // list/enumerate this collection) — this is what lets the auth
+      // screen show "you're invited to trip X" before someone has even
+      // signed up. Only names are exposed here, nothing financial.
+      allow get: if true;
+      allow create: if request.auth != null && request.resource.data.createdByUid == request.auth.uid;
+      // Marking an invite used is only allowed by someone who just
+      // became a member of the trip it points to.
+      allow update: if request.auth != null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['used'])
+        && request.resource.data.used == true
+        && get(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.memberUids.hasAny([request.auth.uid]);
     }
   }
 }
