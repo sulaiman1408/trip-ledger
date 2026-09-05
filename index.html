@@ -178,12 +178,20 @@
     .trip-grid{ grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); }
   }
   .trip-card{
-    background:var(--card); border:1px solid var(--rule-strong); border-radius:10px;
-    padding:1.1rem 1.25rem; text-align:start; cursor:pointer; font-family:inherit; color:inherit;
-    display:flex; flex-direction:column; gap:.6rem; width:100%;
+    position:relative; background:var(--card); border:1px solid var(--rule-strong); border-radius:10px;
     transition:border-color .12s ease;
   }
   .trip-card:hover{ border-color:var(--ink); }
+  .trip-card-open{
+    display:flex; flex-direction:column; gap:.6rem; width:100%;
+    padding:1.1rem 1.25rem; text-align:start; cursor:pointer; font-family:inherit; color:inherit;
+    background:none; border:none;
+  }
+  .trip-card-delete{
+    position:absolute; top:1.1rem; inset-inline-end:1.25rem; background:none; border:none; cursor:pointer;
+    color:var(--ink-faint); font-size:1rem; line-height:1; padding:.15rem;
+  }
+  .trip-card-delete:hover{ color:#B23B3B; }
   .trip-card-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:.5rem; }
   .trip-card-head h3{ font-size:1.1rem; }
   .trip-card-date{ font-size:.78rem; color:var(--ink-soft); margin-top:.2rem; }
@@ -223,9 +231,6 @@
   .btn[disabled]{ opacity:.4; cursor:not-allowed; }
   .btn[disabled]:hover{ background:var(--ink); color:var(--paper); }
   .btn-ghost[disabled]:hover{ background:transparent; color:var(--ink); }
-  .danger-zone{ border-color:color-mix(in srgb, #d33 35%, var(--rule-strong)); }
-  .danger-zone-btn{ border-color:#d33; color:#a12; }
-  .danger-zone-btn:hover{ background:#d33; color:#fff; border-color:#d33; }
 
   /* ---------- ledger ---------- */
   .filter-bar{
@@ -1022,21 +1027,30 @@
       return '<span class="trip-total mono">' + fmt(totals[cur] || 0, cur) + '</span>';
     }).join("");
 
+    // Deleting is only offered from here (the home page cards), never
+    // from inside a trip, and only once every balance is settled — no
+    // erasing a trip while money is still owed between travelers.
+    var isOwner = ui.authUser && t.ownerUid === ui.authUser.uid;
+    var canDelete = isOwner && !unsettled;
+
     return '' +
-      '<button type="button" class="trip-card" data-action="open-trip" data-id="' + t.id + '">' +
-        '<div class="trip-card-head">' +
-          '<div>' +
-            '<h3>' + esc(t.tripName) + '</h3>' +
-            (t.startDate ? '<div class="trip-card-date">' + esc(fmtDateFull(t.startDate)) + '</div>' : '') +
+      '<div class="trip-card">' +
+        '<button type="button" class="trip-card-open" data-action="open-trip" data-id="' + t.id + '">' +
+          '<div class="trip-card-head">' +
+            '<div>' +
+              '<h3>' + esc(t.tripName) + '</h3>' +
+              (t.startDate ? '<div class="trip-card-date">' + esc(fmtDateFull(t.startDate)) + '</div>' : '') +
+            '</div>' +
+            (unsettled ? '<span class="status-badge">غير مُسوّاة</span>' : '') +
           '</div>' +
-          (unsettled ? '<span class="status-badge">غير مُسوّاة</span>' : '') +
-        '</div>' +
-        '<div class="trip-card-meta">' +
-          '<span>' + arCount(t.people.length, "مسافر واحد", "مسافران", "مسافرين") + '</span>' +
-          '<span>' + arCount(t.expenses.length, "مصروف واحد", "مصروفان", "مصروفات") + '</span>' +
-        '</div>' +
-        '<div class="trip-card-totals">' + totalsHtml + '</div>' +
-      '</button>';
+          '<div class="trip-card-meta">' +
+            '<span>' + arCount(t.people.length, "مسافر واحد", "مسافران", "مسافرين") + '</span>' +
+            '<span>' + arCount(t.expenses.length, "مصروف واحد", "مصروفان", "مصروفات") + '</span>' +
+          '</div>' +
+          '<div class="trip-card-totals">' + totalsHtml + '</div>' +
+        '</button>' +
+        (canDelete ? '<button type="button" class="trip-card-delete" data-action="delete-trip-card" data-id="' + t.id + '" title="حذف الرحلة" aria-label="حذف الرحلة">🗑</button>' : '') +
+      '</div>';
   }
 
   function renderHeader(){
@@ -1351,19 +1365,6 @@
     }).filter(Boolean);
     var settleBody = settleGroups.length === 0 ? '<p class="settle-empty">تمت تسوية الجميع.</p>' : settleGroups.join("");
 
-    // Deleting the whole trip is restricted to whoever created it (also
-    // enforced server-side in firestore.rules) — every other member can
-    // edit expenses/travelers freely, but not erase the trip for everyone.
-    var isOwner = ui.authUser && trip.ownerUid === ui.authUser.uid;
-    var dangerZone = isOwner ? '' +
-      '<div class="card danger-zone" style="margin-top:1.5rem;">' +
-        '<div class="card-head"><h2>منطقة الخطر</h2></div>' +
-        '<div class="card-body">' +
-          '<p style="color:var(--ink-soft); font-size:.85rem; margin-top:0;">حذف الرحلة نهائي ويشمل كل مصاريفها ومسافريها وتسويتها — ولا يقدر أحد استعادتها بعدها.</p>' +
-          '<button type="button" class="btn btn-ghost danger-zone-btn" data-action="delete-trip">حذف الرحلة</button>' +
-        '</div>' +
-      '</div>' : '';
-
     return '' +
     '<div>' +
       '<div class="card">' +
@@ -1374,7 +1375,6 @@
         '<div class="card-head"><h2>التسوية</h2></div>' +
         '<div class="card-body">' + settleBody + '</div>' +
       '</div>' +
-      dangerZone +
     '</div>';
   }
 
@@ -1735,23 +1735,26 @@
       closeModal();
       return;
     }
-    if (action === "delete-trip"){
-      // Restricted to the owner in the UI (button only renders for them)
-      // and enforced again server-side by firestore.rules — a joined
-      // member's request to delete would be rejected either way.
-      var tripToDelete = trip;
-      if (!confirm('حذف رحلة "' + tripToDelete.tripName + '" نهائياً؟ يشمل هذا كل مصاريفها ومسافريها وتسويتها، ولا يمكن التراجع.')) return;
-      // Update local state/localStorage and navigate home *before* issuing
-      // the Firestore delete — Firestore can echo a write back through the
-      // live listener almost immediately (its local cache applies writes
-      // before the network round-trip confirms), and if that fires while
-      // localStorage still listed this trip, maybeOfferLocalImport() could
-      // offer to "restore" the trip that's mid-deletion.
-      state.trips = state.trips.filter(function(t){ return t.id !== tripToDelete.id; });
+    if (action === "delete-trip-card"){
+      // Only offered here, on the home page's trip cards — never from
+      // inside a trip — and only once it's fully settled (renderTripCard
+      // hides the button otherwise). Ownership is enforced again
+      // server-side by firestore.rules regardless of what the UI shows.
+      var tid2 = actionEl.getAttribute("data-id");
+      var tripToDelete = state.trips.find(function(t){ return t.id === tid2; });
+      if (!tripToDelete) return;
+      if (tripIsUnsettled(tripToDelete)){ pushToast("سوِّ كل الأرصدة أولاً قبل حذف الرحلة."); return; }
+      if (!confirm('حذف رحلة "' + tripToDelete.tripName + '" نهائياً؟ يشمل هذا كل مصاريفها ومسافريها، ولا يمكن التراجع.')) return;
+      // Update local state/localStorage *before* issuing the Firestore
+      // delete — Firestore can echo a write back through the live listener
+      // almost immediately (its local cache applies writes before the
+      // network round-trip confirms), and if that fires while localStorage
+      // still listed this trip, maybeOfferLocalImport() could offer to
+      // "restore" the trip that's mid-deletion.
+      state.trips = state.trips.filter(function(t){ return t.id !== tid2; });
       saveLocal();
-      ui.view = "home"; ui.currentTripId = null;
       render();
-      fb.mods.fs.deleteDoc(fb.mods.fs.doc(fb.db, "trips", tripToDelete.id)).then(function(){
+      fb.mods.fs.deleteDoc(fb.mods.fs.doc(fb.db, "trips", tid2)).then(function(){
         pushToast('تم حذف رحلة "' + tripToDelete.tripName + '".');
       }).catch(function(err){
         pushToast("تعذّر حذف الرحلة" + (err && err.code ? " (" + err.code + ")" : "") + ".");
