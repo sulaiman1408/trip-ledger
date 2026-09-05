@@ -598,7 +598,8 @@
     pendingJoinToken: null,   // invite token from a ?join=<token> link, cleared once acceptInvite() has consumed it
     pendingJoinPreview: null, // { tripName, personName } shown on the auth screen before signing up
     pendingJoinTripId: null,  // set once the invite is accepted; navigates into the trip as soon as it appears via sync
-    stateLoadError: ''        // set if the Firestore trips listener itself failed (e.g. a rules/permission problem)
+    stateLoadError: '',      // set if the Firestore trips listener itself failed (e.g. a rules/permission problem)
+    inviteResult: null        // { link, text } shown in a modal right after an invite is created
   };
 
   // Attachments are embedded as base64 directly in each trip's Firestore
@@ -892,7 +893,7 @@
       return;
     }
 
-    app.innerHTML = renderHeader() + renderReadonlyBanner() + renderLayout() + renderModal() + renderLightbox() + renderImportPrompt() + renderToasts();
+    app.innerHTML = renderHeader() + renderReadonlyBanner() + renderLayout() + renderModal() + renderLightbox() + renderImportPrompt() + renderInviteResult() + renderToasts();
   }
 
   function renderReadonlyBanner(){
@@ -1192,46 +1193,66 @@
   // (WhatsApp/SMS/etc. — this app is static with no server, so it can't
   // send a text message itself) or copies it to the clipboard as a
   // fallback where the Web Share API isn't available (mainly desktop).
+  // Creates the invites/{token} Firestore document, then shows a
+  // persistent modal with the link (copy + native-share buttons) instead
+  // of relying only on a toast/silent clipboard copy that's easy to miss
+  // or, on some browsers, fails silently with no visible feedback at all.
   function shareInvite(p){
     if (!ui.authUser || !fb.db){ pushToast("سجّل الدخول أولاً."); return; }
-    var token = generateInviteToken();
-    var inviteData = {
-      tripId: trip.id,
-      tripName: trip.tripName,
-      personId: p.id,
-      personName: p.name,
-      phone: p.phone || "",
-      createdByUid: ui.authUser.uid,
-      createdAt: Date.now(),
-      used: false
-    };
-    var ref = fb.mods.fs.doc(fb.db, "invites", token);
-    fb.mods.fs.setDoc(ref, inviteData).then(function(){
-      var link = location.origin + location.pathname + "?join=" + token;
-      var text = p.name + "، انضم لرحلة \"" + trip.tripName + "\" في دفتر الرحلة:";
-      if (navigator.share){
-        navigator.share({ title: "دعوة للانضمام لرحلة", text: text, url: link }).catch(function(err){
-          if (err && err.name === "AbortError") return; // user cancelled the share sheet — not an error
-          copyInviteLink(link);
-        });
-      } else {
-        copyInviteLink(link);
-      }
-    }).catch(function(){
-      pushToast("تعذّر إنشاء رابط الدعوة.");
-    });
+    try {
+      var token = generateInviteToken();
+      var inviteData = {
+        tripId: trip.id,
+        tripName: trip.tripName,
+        personId: p.id,
+        personName: p.name,
+        phone: p.phone || "",
+        createdByUid: ui.authUser.uid,
+        createdAt: Date.now(),
+        used: false
+      };
+      var ref = fb.mods.fs.doc(fb.db, "invites", token);
+      fb.mods.fs.setDoc(ref, inviteData).then(function(){
+        var link = location.origin + location.pathname + "?join=" + token;
+        var text = p.name + "، انضم لرحلة \"" + trip.tripName + "\" في دفتر الرحلة:";
+        ui.inviteResult = { link: link, text: text };
+        render();
+      }).catch(function(err){
+        pushToast("تعذّر إنشاء رابط الدعوة" + (err && err.code ? " (" + err.code + ")" : "") + ".");
+      });
+    } catch (err){
+      pushToast("تعذّر إنشاء رابط الدعوة" + (err && err.message ? ": " + err.message : "") + ".");
+    }
   }
 
   function copyInviteLink(link){
     if (navigator.clipboard && navigator.clipboard.writeText){
       navigator.clipboard.writeText(link).then(function(){
-        pushToast("تم نسخ رابط الدعوة — أرسله عبر واتساب أو رسالة.");
+        pushToast("تم نسخ رابط الدعوة.");
       }).catch(function(){
-        pushToast("رابط الدعوة: " + link);
+        pushToast("تعذّر النسخ — انسخ الرابط يدوياً من الحقل أعلاه.");
       });
     } else {
-      pushToast("رابط الدعوة: " + link);
+      pushToast("تعذّر النسخ — انسخ الرابط يدوياً من الحقل أعلاه.");
     }
+  }
+
+  function renderInviteResult(){
+    if (!ui.inviteResult) return "";
+    var canShare = !!navigator.share;
+    return '<div class="overlay" data-action="close-invite-result">' +
+      '<div class="modal" role="dialog" aria-modal="true" aria-label="رابط الدعوة">' +
+        '<div class="modal-head"><h2>رابط الدعوة جاهز</h2><button type="button" class="close-x" data-action="close-invite-result" aria-label="إغلاق">&times;</button></div>' +
+        '<div class="modal-body">' +
+          '<p style="color:var(--ink-soft); font-size:.88rem; margin-top:0;">انسخه أو شاركه مباشرة، وأرسله للمسافر عبر واتساب أو رسالة. الرابط يعمل لمرة واحدة فقط.</p>' +
+          '<div class="field"><input type="text" readonly value="' + esc(ui.inviteResult.link) + '"></div>' +
+        '</div>' +
+        '<div class="modal-foot">' +
+          (canShare ? '<button type="button" class="btn btn-primary" data-action="native-share-invite">مشاركة</button>' : '') +
+          '<button type="button" class="btn ' + (canShare ? "btn-ghost" : "btn-primary") + '" data-action="copy-invite-link">نسخ الرابط</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
   }
 
   function renderSidebar(){
@@ -1546,6 +1567,22 @@
     if (action === "overlay-close" && e.target === actionEl){ closeModal(); return; }
     if (action === "close-modal"){ closeModal(); return; }
     if (action === "close-lightbox" && e.target === actionEl){ ui.lightbox = null; render(); return; }
+    if (action === "close-invite-result" && e.target === actionEl){ ui.inviteResult = null; render(); return; }
+    if (action === "copy-invite-link"){
+      if (ui.inviteResult) copyInviteLink(ui.inviteResult.link);
+      return;
+    }
+    if (action === "native-share-invite"){
+      // Called directly from this click (a real user gesture) rather than
+      // after an earlier async Firestore write, since some browsers
+      // silently refuse navigator.share() once that gesture has expired.
+      if (ui.inviteResult && navigator.share){
+        navigator.share({ title: "دعوة للانضمام لرحلة", text: ui.inviteResult.text, url: ui.inviteResult.link }).catch(function(err){
+          if (!err || err.name !== "AbortError") pushToast("تعذّرت المشاركة — جرّب زر نسخ الرابط.");
+        });
+      }
+      return;
+    }
 
     if (action === "toggle-auth-mode"){
       ui.authMode = ui.authMode === "signup" ? "login" : "signup";
