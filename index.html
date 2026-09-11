@@ -1301,7 +1301,10 @@
       var inviteControl = "";
       if (p.linkedUid){
         inviteControl = '<span class="joined-badge" title="سجّل حساباً ودخل هذه الرحلة">✓ منضم</span>';
-      } else if (p.phone && !readOnly){
+      } else if (!readOnly){
+        // Available for any not-yet-joined person, not only right when
+        // they're added and not only if a phone number was given — the
+        // owner can come back anytime later and share/re-share the link.
         inviteControl = '<button type="button" class="btn-text" data-action="share-invite" data-id="' + p.id + '">مشاركة دعوة</button>';
       }
       return '<div class="people-row">' +
