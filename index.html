@@ -868,6 +868,66 @@
     }, 3200);
   }
 
+  // ---------- excel export ----------
+  // Loaded on demand (not eagerly) since most sessions never export —
+  // same "fetch a real library only when needed" approach used for the
+  // Firebase SDK.
+  var xlsxLibPromise = null;
+  function loadXLSXLib(){
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    if (xlsxLibPromise) return xlsxLibPromise;
+    xlsxLibPromise = new Promise(function(resolve, reject){
+      var s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+      s.onload = function(){ resolve(window.XLSX); };
+      s.onerror = function(){ xlsxLibPromise = null; reject(new Error("تعذّر تحميل مكتبة التصدير")); };
+      document.head.appendChild(s);
+    });
+    return xlsxLibPromise;
+  }
+
+  function exportTripToExcel(t){
+    pushToast("جارٍ تجهيز ملف الإكسل...");
+    loadXLSXLib().then(function(XLSX){
+      var expenseRows = [["التاريخ", "الوصف", "المبلغ", "العملة", "من دفع", "التصنيف", "المشاركون"]];
+      t.expenses.slice()
+        .sort(function(a, b){ return (a.date || "").localeCompare(b.date || ""); })
+        .forEach(function(e){
+          var participants = (e.participants || []).map(personName).join("، ");
+          expenseRows.push([
+            e.date || "", e.description || "", e.amountCents / 100, e.currency || t.currencySymbol,
+            personName(e.paidBy), e.category || "", participants
+          ]);
+        });
+
+      var settlementRows = [["التاريخ", "من", "إلى", "المبلغ", "العملة"]];
+      (t.settlements || []).slice()
+        .sort(function(a, b){ return (a.date || "").localeCompare(b.date || ""); })
+        .forEach(function(s){
+          settlementRows.push([s.date || "", personName(s.from), personName(s.to), s.amountCents / 100, s.currency || t.currencySymbol]);
+        });
+
+      var balances = computeBalances(t);
+      var balanceRows = [["الشخص", "العملة", "الرصيد"]];
+      Object.keys(balances).forEach(function(cur){
+        t.people.forEach(function(p){
+          balanceRows.push([p.name, cur, (balances[cur][p.id] || 0) / 100]);
+        });
+      });
+
+      var wb = XLSX.utils.book_new();
+      wb.Workbook = { Views: [{ RTL: true }] };
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(expenseRows), "المصاريف");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(settlementRows), "الدفعات");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(balanceRows), "الأرصدة");
+
+      XLSX.writeFile(wb, (t.tripName || "رحلة") + " - سجل المصاريف.xlsx");
+      pushToast("تم تنزيل ملف الإكسل.");
+    }).catch(function(){
+      pushToast("تعذّر تجهيز ملف الإكسل. تحقق من الاتصال بالإنترنت وحاول مجدداً.");
+    });
+  }
+
   function persistTrip(tripObj){
     if (!ui.authUser || !fb.db || !tripObj) return;
     var ref = fb.mods.fs.doc(fb.db, "trips", tripObj.id);
@@ -1108,6 +1168,7 @@
           '<span>' + arCount(trip.expenses.length, "مصروف واحد", "مصروفان", "مصروفات") + '</span>' +
           (badges ? '<span class="travelers-strip">' + badges + more + '</span>' : '') +
           (trip.expenses.length ? '<button type="button" class="theme-toggle" data-action="open-stats">📊 الإحصائيات</button>' : '') +
+          ((trip.expenses.length || (trip.settlements||[]).length) ? '<button type="button" class="theme-toggle" data-action="export-excel" title="تنزيل سجلات الرحلة كملف إكسل">⬇️ تصدير Excel</button>' : '') +
           '<button type="button" class="theme-toggle" data-action="toggle-theme">' + (getTheme() === "dark" ? "الوضع الفاتح" : "الوضع الداكن") + '</button>' +
         '</div>' +
       '</div>' +
@@ -1797,6 +1858,10 @@
     }
     if (action === "open-stats"){
       ui.modal = "stats"; render(); return;
+    }
+    if (action === "export-excel"){
+      exportTripToExcel(trip);
+      return;
     }
     if (action === "open-payment"){
       ui.paymentPrefill = { from: actionEl.getAttribute("data-from"), to: actionEl.getAttribute("data-to"), amount: actionEl.getAttribute("data-amount"), currency: actionEl.getAttribute("data-currency") };
