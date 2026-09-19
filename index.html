@@ -168,16 +168,16 @@
   /* ---------- layout ---------- */
   .layout{
     max-width:1100px; margin:0 auto; padding:1.75rem 1.5rem 4rem;
-    display:grid; gap:1.5rem; grid-template-columns:1fr;
+    display:grid; gap:1.5rem; grid-template-columns:minmax(0,1fr);
   }
   @media (min-width:900px){
-    .layout{ grid-template-columns:1fr 340px; align-items:start; }
+    .layout{ grid-template-columns:minmax(0,1fr) 340px; align-items:start; }
   }
 
   /* ---------- home page (trip list) ---------- */
   .home-layout{ max-width:1100px; margin:0 auto; padding:1.75rem 1.5rem 4rem; }
   .home-layout h2{ font-size:1.3rem; margin-bottom:1rem; }
-  .trip-grid{ display:grid; gap:1rem; grid-template-columns:1fr; }
+  .trip-grid{ display:grid; gap:1rem; grid-template-columns:minmax(0,1fr); }
   @media (min-width:640px){
     .trip-grid{ grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); }
   }
@@ -250,7 +250,7 @@
   .empty p{ margin:0 0 1rem; font-size:.9rem; }
 
   .ledger-row{
-    display:grid; grid-template-columns:3.6rem 1fr auto auto; gap:.9rem; align-items:start;
+    display:grid; grid-template-columns:3.6rem minmax(0,1fr) auto auto; gap:.9rem; align-items:start;
     padding:.9rem 1.25rem; border-bottom:1px solid var(--rule);
   }
   .ledger-row:last-child{ border-bottom:none; }
@@ -264,6 +264,24 @@
   .ledger-row .amount-col{ text-align:end; }
   .ledger-row .amount{ font-weight:700; font-size:1rem; }
   .ledger-row .actions{ display:flex; flex-direction:column; gap:.25rem; align-items:flex-end; }
+
+  /* On a phone-width screen, the 4-column grid (date | description |
+     amount | actions) leaves the description almost no room — a normal
+     expense name wraps into a tall single-word-per-line column. Reflow
+     to: a top row with the (small) date and the amount, the description
+     given the full row width under it, then the edit/delete actions on
+     their own row. */
+  @media (max-width:640px){
+    .ledger-row{
+      grid-template-columns:minmax(0,1fr) auto;
+      grid-template-areas:"date amount" "main main" "actions actions";
+      row-gap:.35rem;
+    }
+    .ledger-row .date{ grid-area:date; padding-top:0; }
+    .ledger-row .amount-col{ grid-area:amount; }
+    .ledger-row .ledger-main{ grid-area:main; }
+    .ledger-row .actions{ grid-area:actions; flex-direction:row; justify-content:flex-end; gap:1rem; }
+  }
 
   /* ---------- balances / settle up ---------- */
   .balance-row{ display:flex; align-items:center; gap:.6rem; padding:.55rem 0; }
@@ -285,8 +303,8 @@
   }
 
   /* ---------- statistics ---------- */
-  .stat-summary-grid{ display:grid; grid-template-columns:repeat(2, 1fr); gap:1rem; margin-bottom:1.4rem; }
-  @media (min-width:480px){ .stat-summary-grid{ grid-template-columns:repeat(4, 1fr); } }
+  .stat-summary-grid{ display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:1rem; margin-bottom:1.4rem; }
+  @media (min-width:480px){ .stat-summary-grid{ grid-template-columns:repeat(4, minmax(0,1fr)); } }
   .stat-summary-item .value{ font-size:1.15rem; font-weight:700; margin-top:.2rem; }
   .stat-block{ margin-top:1.3rem; }
   .stat-block:first-of-type{ margin-top:0; }
@@ -339,7 +357,7 @@
   input[type=text]:focus, input[type=number]:focus, input[type=date]:focus, input[type=email]:focus, input[type=password]:focus, select:focus{
     outline:none; border-color:var(--ink); box-shadow:0 0 0 3px color-mix(in srgb, var(--ink) 12%, transparent);
   }
-  .row2{ display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
+  .row2{ display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:.75rem; }
   .amount-currency{ display:flex; gap:.4rem; }
   .amount-currency input{ flex:1; min-width:0; }
   .amount-currency select{ width:auto; flex:0 0 auto; max-width:8.5rem; }
@@ -424,6 +442,11 @@
   .people-row .phone{ font-size:.76rem; color:var(--ink-soft); }
   .joined-badge{ font-size:.78rem; color:var(--ink-soft); white-space:nowrap; }
   .people-add-form{ flex-wrap:wrap; }
+  /* Name gets its own full-width row; phone + submit share the row under
+     it. Without this, on a narrow phone all three controls fought for
+     one line and the name input shrank until its placeholder was cut
+     off ("أضف مس..."). */
+  .people-add-form input[name="name"]{ flex:1 1 100%; min-width:0; }
   .people-add-form input[name="phone"]{ flex:1; min-width:8rem; }
 
   /* ---------- modal ---------- */
@@ -1249,7 +1272,7 @@
     return '' +
     '<div class="ledger-row">' +
       '<div class="date mono">' + esc(fmtDate(e.date)) + '</div>' +
-      '<div>' +
+      '<div class="ledger-main">' +
         '<div class="desc">' + esc(e.description) + '</div>' +
         '<div class="subline">' +
           (e.category ? '<span class="tag">' + esc(e.category) + '</span>' : '') +
