@@ -303,6 +303,8 @@
   }
 
   /* ---------- statistics ---------- */
+  .stats-currency-field{ max-width:20rem; }
+  .stats-convert-note{ margin:.4rem 0 0; font-size:.76rem; color:var(--ink-soft); }
   .stat-summary-grid{ display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:1rem; margin-bottom:1.4rem; }
   @media (min-width:480px){ .stat-summary-grid{ grid-template-columns:repeat(4, minmax(0,1fr)); } }
   .stat-summary-item .value{ font-size:1.15rem; font-weight:700; margin-top:.2rem; }
@@ -613,6 +615,16 @@
     rate = rate == null ? getExchangeRate(cur) : rate;
     return Math.round(amountCents * rate);
   }
+  // Converts between any two currencies via Riyal as the hub (the only
+  // rates the app actually stores are "<currency> -> Riyal"), reusing
+  // whichever rate — the built-in default or the trip's own saved
+  // override — getExchangeRate() would already use elsewhere.
+  function convertCents(amountCents, fromCur, toCur){
+    if (fromCur === toCur) return amountCents;
+    var riyalCents = toRiyalCents(amountCents, fromCur);
+    var toRate = getExchangeRate(toCur);
+    return Math.round(riyalCents / toRate);
+  }
 
   var state = null;
   var trip = null;      // the currently open trip object (a reference into state.trips), or null on the home page
@@ -643,7 +655,8 @@
     pendingJoinTripId: null,  // set once the invite is accepted; navigates into the trip as soon as it appears via sync
     stateLoadError: '',      // set if the Firestore trips listener itself failed (e.g. a rules/permission problem)
     inviteResult: null,       // { link, text } shown in a modal right after an invite is created
-    expenseFilter: { category: '', from: '', to: '' } // view-only filter for the expense list, not persisted
+    expenseFilter: { category: '', from: '', to: '' }, // view-only filter for the expense list, not persisted
+    statsCurrency: RIYAL     // currency the "إحصائيات الرحلة" report is calculated in; defaults to السعودي
   };
 
   // Attachments are embedded as base64 directly in each trip's Firestore
@@ -1517,26 +1530,34 @@
 
   // ---------- statistics ----------
   function renderStatsModal(){
-    var byCurrency = {};
-    trip.expenses.forEach(function(e){
-      var cur = e.currency || trip.currencySymbol;
-      (byCurrency[cur] = byCurrency[cur] || []).push(e);
+    var statsCur = ui.statsCurrency || RIYAL;
+    // Every expense converted into the chosen report currency, so totals,
+    // the "highest cost" pick, and the category/payer bars all compare
+    // like-for-like even when the trip itself has expenses in more than
+    // one currency. Conversion reuses whatever rate the rest of the app
+    // already uses (trip.exchangeRates override, else the built-in
+    // default) via convertCents()/getExchangeRate().
+    var convertedExpenses = trip.expenses.map(function(e){
+      return Object.assign({}, e, {
+        amountCents: convertCents(e.amountCents, e.currency || trip.currencySymbol, statsCur)
+      });
     });
-    var curList = Object.keys(byCurrency).sort(function(a,b){
-      if (a === trip.currencySymbol) return -1;
-      if (b === trip.currencySymbol) return 1;
-      return a.localeCompare(b);
-    });
-    var multi = curList.length > 1;
+    var hasOtherCurrencies = trip.expenses.some(function(e){ return (e.currency || trip.currencySymbol) !== statsCur; });
+
+    var currencyPicker = '<div class="field stats-currency-field">' +
+      '<label>احسب الإحصائيات بعملة</label>' +
+      '<select data-field="statsCurrency">' + currencyOptionsHtml(statsCur) + '</select>' +
+      (hasOtherCurrencies ? '<p class="stats-convert-note">حُوّلت المبالغ بعملات أخرى إلى هذه العملة باستخدام أسعار الصرف المحفوظة في الرحلة.</p>' : '') +
+    '</div>';
 
     var body = trip.expenses.length === 0
       ? '<p class="settle-empty">لا توجد مصاريف بعد لعرض إحصائيات عنها.</p>'
-      : curList.map(function(cur){ return renderCurrencyStats(cur, byCurrency[cur], multi); }).join("");
+      : renderCurrencyStats(statsCur, convertedExpenses, false);
 
     return '<div class="overlay" data-action="overlay-close">' +
       '<div class="modal modal-wide" role="dialog" aria-modal="true" aria-label="إحصائيات الرحلة">' +
         '<div class="modal-head"><h2>إحصائيات الرحلة</h2><button type="button" class="close-x" data-action="close-modal" aria-label="إغلاق">&times;</button></div>' +
-        '<div class="modal-body">' + body + '</div>' +
+        '<div class="modal-body">' + currencyPicker + body + '</div>' +
         '<div class="modal-foot"><button type="button" class="btn btn-ghost" data-action="close-modal">إغلاق</button></div>' +
       '</div>' +
     '</div>';
@@ -2108,6 +2129,11 @@
         if (val !== trip.currencySymbol) mutate(function(){ trip.currencySymbol = val; });
         else render();
       }
+    }
+
+    if (e.target.matches('[data-field="statsCurrency"]')){
+      ui.statsCurrency = e.target.value;
+      render();
     }
 
     if (e.target.matches('[data-field="filterCategory"]')){
