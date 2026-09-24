@@ -353,6 +353,14 @@
   .convert-result{ font-weight:700; color:var(--ink); }
   .convert-hint{ flex-basis:100%; font-size:.72rem; color:var(--ink-faint); }
 
+  /* ---------- settlement history ---------- */
+  .settlement-row{ display:flex; align-items:center; gap:.6rem; padding:.55rem 0; border-bottom:1px solid var(--rule); }
+  .settlement-row:last-child{ border-bottom:none; }
+  .settlement-row-main{ flex:1; min-width:0; }
+  .settlement-row-flow{ font-size:.85rem; }
+  .settlement-row-date{ font-size:.76rem; color:var(--ink-soft); margin-top:.15rem; }
+  .settlement-row-amt{ font-size:.9rem; font-weight:700; flex-shrink:0; }
+
   /* ---------- forms ---------- */
   label{ display:block; font-size:.78rem; font-weight:600; color:var(--ink-soft); margin-bottom:.3rem; }
   .field{ margin-bottom:.9rem; }
@@ -1509,6 +1517,35 @@
         '<div class="card-head"><h2>التسوية</h2>' + settleToggle + '</div>' +
         '<div class="card-body">' + settleBody + '</div>' +
       '</div>' +
+      renderSettlementHistoryCard() +
+    '</div>';
+  }
+
+  // A record of every settlement actually marked as paid ("تسجيل" on a
+  // suggested transaction, or the standalone "تسجيل دفعة" button) — as
+  // opposed to the two cards above, which only ever show the *current*,
+  // still-outstanding picture. trip.settlements already carries exactly
+  // this history (it's what computeBalances() nets against expenses to
+  // get the live balances) — it just had nowhere in the UI that listed
+  // it out.
+  function renderSettlementHistoryCard(){
+    var settlements = (trip.settlements || []).slice().sort(function(a,b){
+      return (b.date || "").localeCompare(a.date || "") || (b.id || "").localeCompare(a.id || "");
+    });
+    var rows = settlements.map(function(s){
+      return '<div class="settlement-row">' +
+        '<div class="settlement-row-main">' +
+          '<div class="settlement-row-flow">من <strong>' + esc(personName(s.from)) + '</strong> إلى <strong>' + esc(personName(s.to)) + '</strong></div>' +
+          '<div class="settlement-row-date mono">' + esc(fmtDate(s.date)) + '</div>' +
+        '</div>' +
+        '<div class="settlement-row-amt mono">' + fmt(s.amountCents, s.currency || trip.currencySymbol) + '</div>' +
+        (readOnly ? '' : '<button type="button" class="btn-text danger" data-action="delete-settlement" data-id="' + s.id + '">حذف</button>') +
+      '</div>';
+    }).join("");
+
+    return '<div class="card" style="margin-top:1.5rem;">' +
+      '<div class="card-head"><h2>سجل التسويات</h2></div>' +
+      '<div class="card-body">' + (rows || '<p class="settle-empty">لا توجد تسويات منفذة بعد.</p>') + '</div>' +
     '</div>';
   }
 
@@ -1910,6 +1947,14 @@
         trip.expenses = trip.expenses.filter(function(x){ return x.id !== did; });
       });
       closeModal();
+      return;
+    }
+    if (action === "delete-settlement"){
+      var sid = actionEl.getAttribute("data-id");
+      if (!confirm("حذف هذا السجل من سجل التسويات؟ سيُعاد احتساب الأرصدة كأن هذا الدفع لم يحدث.")) return;
+      mutate(function(){
+        trip.settlements = (trip.settlements || []).filter(function(s){ return s.id !== sid; });
+      });
       return;
     }
     if (action === "delete-trip-card"){
