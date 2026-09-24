@@ -1538,8 +1538,17 @@
     // already uses (trip.exchangeRates override, else the built-in
     // default) via convertCents()/getExchangeRate().
     var convertedExpenses = trip.expenses.map(function(e){
+      var fromCur = e.currency || trip.currencySymbol;
+      var convertedShares = e.shares;
+      if (e.splitType === "exact" && e.shares){
+        convertedShares = {};
+        Object.keys(e.shares).forEach(function(pid){
+          convertedShares[pid] = convertCents(e.shares[pid], fromCur, statsCur);
+        });
+      }
       return Object.assign({}, e, {
-        amountCents: convertCents(e.amountCents, e.currency || trip.currencySymbol, statsCur)
+        amountCents: convertCents(e.amountCents, fromCur, statsCur),
+        shares: convertedShares
       });
     });
     var hasOtherCurrencies = trip.expenses.some(function(e){ return (e.currency || trip.currencySymbol) !== statsCur; });
@@ -1596,6 +1605,26 @@
       .map(function(p){ return { label: personName(p), amount: byPayer[p] }; });
     var maxPayer = Math.max.apply(null, payerRows.map(function(r){ return r.amount; }).concat([1]));
 
+    // Each traveler's actual share of the spending — what they owe/consumed,
+    // as opposed to byPayer above (who fronted the money). Uses the same
+    // per-expense split math as computeBalances(): exact shares as entered,
+    // equalShares() for an equal split.
+    var byShare = {};
+    expenses.forEach(function(e){
+      if (e.splitType === "exact"){
+        Object.keys(e.shares || {}).forEach(function(pid){
+          byShare[pid] = (byShare[pid] || 0) + e.shares[pid];
+        });
+      } else {
+        var parts = e.participants || [];
+        var shares = equalShares(e.amountCents, parts.length || 1);
+        parts.forEach(function(pid, idx){ byShare[pid] = (byShare[pid] || 0) + shares[idx]; });
+      }
+    });
+    var shareRows = Object.keys(byShare).sort(function(a,b){ return byShare[b] - byShare[a]; })
+      .map(function(p){ return { label: personName(p), amount: byShare[p] }; });
+    var maxShare = Math.max.apply(null, shareRows.map(function(r){ return r.amount; }).concat([1]));
+
     var summaryHtml = '<div class="stat-summary-grid">' +
       '<div class="stat-summary-item"><div class="eyebrow">إجمالي الصرف</div><div class="value mono">' + fmt(total, cur) + '</div></div>' +
       '<div class="stat-summary-item"><div class="eyebrow">عدد المصاريف</div><div class="value mono">' + count + '</div></div>' +
@@ -1605,10 +1634,11 @@
 
     var catHtml = '<div class="stat-block"><h4>حسب التصنيف</h4>' + renderStatBars(catRows, total, maxCat, cur) + '</div>';
     var payerHtml = '<div class="stat-block"><h4>حسب من دفع</h4>' + renderStatBars(payerRows, total, maxPayer, cur) + '</div>';
+    var shareHtml = '<div class="stat-block"><h4>حسب نصيب كل مسافر</h4>' + renderStatBars(shareRows, total, maxShare, cur) + '</div>';
 
     return '<div class="currency-group">' +
       (multi ? '<div class="currency-group-label">' + esc(currencyLabel(cur)) + '</div>' : '') +
-      summaryHtml + catHtml + payerHtml +
+      summaryHtml + catHtml + payerHtml + shareHtml +
     '</div>';
   }
 
