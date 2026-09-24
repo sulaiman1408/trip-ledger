@@ -216,6 +216,10 @@
   }
   .card-head h2{ font-size:1.3rem; }
   .card-body{ padding:1.1rem 1.25rem 1.25rem; }
+  .settle-riyal-toggle{
+    display:flex; align-items:center; gap:.4rem; font-size:.8rem; font-weight:400;
+    color:var(--ink-soft); cursor:pointer; margin:0; text-align:end;
+  }
 
   /* ---------- buttons ---------- */
   .btn{
@@ -656,7 +660,8 @@
     stateLoadError: '',      // set if the Firestore trips listener itself failed (e.g. a rules/permission problem)
     inviteResult: null,       // { link, text } shown in a modal right after an invite is created
     expenseFilter: { category: '', from: '', to: '' }, // view-only filter for the expense list, not persisted
-    statsCurrency: RIYAL     // currency the "إحصائيات الرحلة" report is calculated in; defaults to السعودي
+    statsCurrency: RIYAL,    // currency the "إحصائيات الرحلة" report is calculated in; defaults to السعودي
+    settleInRiyal: false     // when true, "التسوية" combines every currency's balances into one netted Riyal settlement
   };
 
   // Attachments are embedded as base64 directly in each trip's Firestore
@@ -1461,13 +1466,38 @@
         return '<div class="currency-group">' + (multiCurrency ? '<div class="currency-group-label">' + esc(currencyLabel(cur)) + '</div>' : '') + rows + '</div>';
       }).join("");
 
-    var settleGroups = trip.people.length === 0 ? [] : currencies.map(function(cur){
-      var txns = simplifyDebts(bal[cur]);
-      if (txns.length === 0) return "";
-      var body = txns.map(function(t){ return renderSettleTxn(t, cur); }).join("");
-      return '<div class="currency-group">' + (multiCurrency ? '<div class="currency-group-label">' + esc(currencyLabel(cur)) + '</div>' : '') + body + '</div>';
-    }).filter(Boolean);
-    var settleBody = settleGroups.length === 0 ? '<p class="settle-empty">تمت تسوية الجميع.</p>' : settleGroups.join("");
+    var settleBody;
+    if (trip.people.length === 0){
+      settleBody = '<p class="settle-empty">أضف مسافرين لعرض التسوية.</p>';
+    } else if (ui.settleInRiyal){
+      // Net every currency's balances into one Riyal-denominated balance
+      // per person (using the same per-currency rate simplifyDebts()
+      // would otherwise be blind to), then simplify once — so a trip
+      // with debts in several currencies collapses into a single set of
+      // "من فلان إلى فلان" transactions instead of one list per currency.
+      var combinedRiyalBal = {};
+      trip.people.forEach(function(p){ combinedRiyalBal[p.id] = 0; });
+      currencies.forEach(function(cur){
+        trip.people.forEach(function(p){
+          combinedRiyalBal[p.id] += toRiyalCents(bal[cur][p.id] || 0, cur);
+        });
+      });
+      var combinedTxns = simplifyDebts(combinedRiyalBal);
+      settleBody = combinedTxns.length === 0
+        ? '<p class="settle-empty">تمت تسوية الجميع.</p>'
+        : combinedTxns.map(function(t){ return renderSettleTxn(t, RIYAL); }).join("");
+    } else {
+      var settleGroups = currencies.map(function(cur){
+        var txns = simplifyDebts(bal[cur]);
+        if (txns.length === 0) return "";
+        var body = txns.map(function(t){ return renderSettleTxn(t, cur); }).join("");
+        return '<div class="currency-group">' + (multiCurrency ? '<div class="currency-group-label">' + esc(currencyLabel(cur)) + '</div>' : '') + body + '</div>';
+      }).filter(Boolean);
+      settleBody = settleGroups.length === 0 ? '<p class="settle-empty">تمت تسوية الجميع.</p>' : settleGroups.join("");
+    }
+
+    var settleToggle = trip.people.length === 0 ? '' :
+      '<label class="settle-riyal-toggle"><input type="checkbox" data-field="settleInRiyal"' + (ui.settleInRiyal ? " checked" : "") + '> حوّل التسوية إلى الريال السعودي</label>';
 
     return '' +
     '<div>' +
@@ -1476,7 +1506,7 @@
         '<div class="card-body">' + balRows + '</div>' +
       '</div>' +
       '<div class="card" style="margin-top:1.5rem;">' +
-        '<div class="card-head"><h2>التسوية</h2></div>' +
+        '<div class="card-head"><h2>التسوية</h2>' + settleToggle + '</div>' +
         '<div class="card-body">' + settleBody + '</div>' +
       '</div>' +
     '</div>';
@@ -2163,6 +2193,11 @@
 
     if (e.target.matches('[data-field="statsCurrency"]')){
       ui.statsCurrency = e.target.value;
+      render();
+    }
+
+    if (e.target.matches('[data-field="settleInRiyal"]')){
+      ui.settleInRiyal = e.target.checked;
       render();
     }
 
