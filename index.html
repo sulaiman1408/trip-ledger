@@ -667,7 +667,7 @@
     pendingJoinTripId: null,  // set once the invite is accepted; navigates into the trip as soon as it appears via sync
     stateLoadError: '',      // set if the Firestore trips listener itself failed (e.g. a rules/permission problem)
     inviteResult: null,       // { link, text } shown in a modal right after an invite is created
-    expenseFilter: { category: '', from: '', to: '' }, // view-only filter for the expense list, not persisted
+    expenseFilter: { category: '', from: '', to: '', paidBy: '' }, // view-only filter for the expense list, not persisted
     statsCurrency: RIYAL,    // currency the "إحصائيات الرحلة" report is calculated in; defaults to السعودي
     settleInRiyal: false     // when true, "التسوية" combines every currency's balances into one netted Riyal settlement
   };
@@ -1238,6 +1238,7 @@
     return list.filter(function(e){
       if (f.category === UNCATEGORIZED_FILTER){ if (e.category) return false; }
       else if (f.category && e.category !== f.category) return false;
+      if (f.paidBy && e.paidBy !== f.paidBy) return false;
       if (f.from && (e.date || "") < f.from) return false;
       if (f.to && (e.date || "") > f.to) return false;
       return true;
@@ -1250,7 +1251,9 @@
       trip.expenses.map(function(e){ return e.category || ""; }).filter(function(c){ return c; })
     )).sort(function(a, b){ return a.localeCompare(b, "ar"); });
     var hasUncategorized = trip.expenses.some(function(e){ return !e.category; });
-    var active = !!(f.category || f.from || f.to);
+    var payerIds = Array.from(new Set(trip.expenses.map(function(e){ return e.paidBy; }).filter(function(pid){ return pid; })))
+      .sort(function(a, b){ return personName(a).localeCompare(personName(b), "ar"); });
+    var active = !!(f.category || f.from || f.to || f.paidBy);
 
     var catOptions = '<option value="">كل التصنيفات</option>' +
       categories.map(function(c){
@@ -1258,8 +1261,14 @@
       }).join("") +
       (hasUncategorized ? '<option value="' + UNCATEGORIZED_FILTER + '"' + (f.category === UNCATEGORIZED_FILTER ? " selected" : "") + '>بدون تصنيف</option>' : "");
 
+    var payerOptions = '<option value="">كل من دفع</option>' +
+      payerIds.map(function(pid){
+        return '<option value="' + esc(pid) + '"' + (f.paidBy === pid ? " selected" : "") + '>' + esc(personName(pid)) + '</option>';
+      }).join("");
+
     return '<div class="filter-bar">' +
       '<select data-field="filterCategory" aria-label="فلترة حسب التصنيف">' + catOptions + '</select>' +
+      '<select data-field="filterPaidBy" aria-label="فلترة حسب من دفع">' + payerOptions + '</select>' +
       '<span class="filter-sep">من</span>' +
       '<input type="date" data-field="filterDateFrom" value="' + esc(f.from) + '" aria-label="من تاريخ">' +
       '<span class="filter-sep">إلى</span>' +
@@ -2030,7 +2039,7 @@
     if (action === "open-trip"){
       var tid = actionEl.getAttribute("data-id");
       ui.view = "trip"; ui.currentTripId = tid;
-      ui.expenseFilter = { category: '', from: '', to: '' };
+      ui.expenseFilter = { category: '', from: '', to: '', paidBy: '' };
       render(); return;
     }
     if (action === "go-home"){
@@ -2038,7 +2047,7 @@
       render(); return;
     }
     if (action === "clear-expense-filter"){
-      ui.expenseFilter = { category: '', from: '', to: '' };
+      ui.expenseFilter = { category: '', from: '', to: '', paidBy: '' };
       render(); return;
     }
   });
@@ -2248,6 +2257,10 @@
 
     if (e.target.matches('[data-field="filterCategory"]')){
       ui.expenseFilter.category = e.target.value;
+      render();
+    }
+    if (e.target.matches('[data-field="filterPaidBy"]')){
+      ui.expenseFilter.paidBy = e.target.value;
       render();
     }
     if (e.target.matches('[data-field="filterDateFrom"]')){
