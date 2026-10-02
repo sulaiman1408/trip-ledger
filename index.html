@@ -977,6 +977,105 @@
     });
   }
 
+  // ---------- stats PDF export ----------
+  // Same on-demand loading approach as the Excel export above.
+  // html2pdf.js bundles html2canvas + jsPDF: rendering the report as an
+  // actual DOM node and rasterizing it is what makes the Arabic text
+  // come out correctly shaped — jsPDF's own text APIs don't do Arabic
+  // shaping/BiDi on their own.
+  var html2pdfLibPromise = null;
+  function loadHtml2PdfLib(){
+    if (window.html2pdf) return Promise.resolve(window.html2pdf);
+    if (html2pdfLibPromise) return html2pdfLibPromise;
+    html2pdfLibPromise = new Promise(function(resolve, reject){
+      var s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.2/html2pdf.bundle.min.js";
+      s.onload = function(){ resolve(window.html2pdf); };
+      s.onerror = function(){ html2pdfLibPromise = null; reject(new Error("تعذّر تحميل مكتبة تصدير PDF")); };
+      document.head.appendChild(s);
+    });
+    return html2pdfLibPromise;
+  }
+
+  // Plain, fully inline-styled markup — deliberately NOT reusing the
+  // .stat-* classes from the live modal, since those read CSS custom
+  // properties that flip with the current light/dark theme. A document
+  // meant to be shared with other travelers should look the same (light,
+  // printable) no matter which theme whoever exported it happened to be
+  // using at the time.
+  function renderPdfStatBars(rows, total, maxVal, cur){
+    return rows.map(function(r){
+      var pct = total > 0 ? Math.round((r.amount / total) * 100) : 0;
+      var barPct = maxVal > 0 ? Math.round((r.amount / maxVal) * 100) : 0;
+      return '<div style="display:flex; align-items:center; gap:10px; padding:5px 0; font-size:12px;">' +
+        '<span style="flex:0 0 110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + esc(r.label) + '</span>' +
+        '<div style="flex:1; height:8px; border-radius:4px; background:#ececec;"><div style="height:100%; border-radius:4px; background:#111111; width:' + barPct + '%;"></div></div>' +
+        '<span style="flex:0 0 auto; white-space:nowrap;">' + fmt(r.amount, cur) + ' <span style="color:#8a8a8a;">(' + pct + '%)</span></span>' +
+      '</div>';
+    }).join("");
+  }
+
+  function renderStatsPdfHtml(statsCur, expenses){
+    var a = computeStatsAggregates(expenses);
+    var tile = function(label, value){
+      return '<div style="flex:1 1 40%; min-width:140px; padding:10px 0;">' +
+        '<div style="font-size:11px; color:#7a7a7a; margin-bottom:3px;">' + esc(label) + '</div>' +
+        '<div style="font-size:17px; font-weight:700;">' + value + '</div>' +
+      '</div>';
+    };
+    var summaryHtml = '<div style="display:flex; flex-wrap:wrap; gap:4px 16px; border-top:1px solid #e5e5e5; border-bottom:1px solid #e5e5e5; margin-bottom:18px;">' +
+      tile("إجمالي الصرف", fmt(a.total, statsCur)) +
+      tile("عدد المصاريف", String(a.count)) +
+      tile("متوسط المصروف", fmt(a.avg, statsCur)) +
+      (a.top ? tile("الأعلى تكلفة", fmt(a.top.amountCents, statsCur)) : "") +
+    '</div>';
+    var section = function(title, rows, max){
+      return '<div style="margin-bottom:16px;">' +
+        '<div style="font-size:13px; font-weight:700; margin-bottom:8px;">' + esc(title) + '</div>' +
+        renderPdfStatBars(rows, a.total, max, statsCur) +
+      '</div>';
+    };
+    return '<div style="direction:rtl; text-align:right; font-family:\'Thmanyah Sans\',\'Segoe UI\',Tahoma,sans-serif; color:#0A0A0A; background:#ffffff; padding:26px 30px; width:600px;">' +
+      '<div style="font-family:\'Thmanyah Serif Display\',serif; font-weight:700; font-size:22px; margin-bottom:2px;">إحصائيات الرحلة</div>' +
+      '<div style="font-size:14px; font-weight:600; color:#4b4b4b; margin-bottom:2px;">' + esc(trip.tripName) + '</div>' +
+      '<div style="font-size:11px; color:#9a9a9a; margin-bottom:18px;">صُدِّر في ' + esc(fmtDateFull(todayISO())) + '</div>' +
+      summaryHtml +
+      section("حسب التصنيف", a.catRows, a.maxCat) +
+      section("حسب من دفع", a.payerRows, a.maxPayer) +
+      section("حسب نصيب كل مسافر", a.shareRows, a.maxShare) +
+    '</div>';
+  }
+
+  function exportStatsToPdf(){
+    if (!trip.expenses.length) return;
+    pushToast("جارٍ تجهيز ملف PDF...");
+    loadHtml2PdfLib().then(function(html2pdf){
+      var statsCur = ui.statsCurrency || RIYAL;
+      var convertedExpenses = getStatsConvertedExpenses(statsCur);
+      var container = document.createElement("div");
+      // Off-screen rather than hidden — a hidden (display:none) element
+      // has no layout box for html2canvas to measure/paint.
+      container.style.cssText = "position:fixed; top:0; inset-inline-start:-9999px;";
+      container.innerHTML = renderStatsPdfHtml(statsCur, convertedExpenses);
+      document.body.appendChild(container);
+
+      html2pdf().from(container).set({
+        margin: 10,
+        filename: (trip.tripName || "رحلة") + " - إحصائيات.pdf",
+        html2canvas: { scale: 2, backgroundColor: "#ffffff" },
+        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
+      }).save().then(function(){
+        document.body.removeChild(container);
+        pushToast("تم تنزيل ملف PDF.");
+      }).catch(function(){
+        if (container.parentNode) document.body.removeChild(container);
+        pushToast("تعذّر إنشاء ملف PDF.");
+      });
+    }).catch(function(){
+      pushToast("تعذّر تحميل مكتبة تصدير PDF. تحقق من الاتصال بالإنترنت وحاول مجدداً.");
+    });
+  }
+
   function persistTrip(tripObj){
     if (!ui.authUser || !fb.db || !tripObj) return;
     var ref = fb.mods.fs.doc(fb.db, "trips", tripObj.id);
@@ -1605,15 +1704,15 @@
   }
 
   // ---------- statistics ----------
-  function renderStatsModal(){
-    var statsCur = ui.statsCurrency || RIYAL;
-    // Every expense converted into the chosen report currency, so totals,
-    // the "highest cost" pick, and the category/payer bars all compare
-    // like-for-like even when the trip itself has expenses in more than
-    // one currency. Conversion reuses whatever rate the rest of the app
-    // already uses (trip.exchangeRates override, else the built-in
-    // default) via convertCents()/getExchangeRate().
-    var convertedExpenses = trip.expenses.map(function(e){
+  // Every expense converted into the chosen report currency, so totals,
+  // the "highest cost" pick, and the category/payer bars all compare
+  // like-for-like even when the trip itself has expenses in more than
+  // one currency. Conversion reuses whatever rate the rest of the app
+  // already uses (trip.exchangeRates override, else the built-in
+  // default) via convertCents()/getExchangeRate(). Shared by the stats
+  // modal and the PDF export so both report the exact same numbers.
+  function getStatsConvertedExpenses(statsCur){
+    return trip.expenses.map(function(e){
       var fromCur = e.currency || trip.currencySymbol;
       var convertedShares = e.shares;
       if (e.splitType === "exact" && e.shares){
@@ -1627,6 +1726,11 @@
         shares: convertedShares
       });
     });
+  }
+
+  function renderStatsModal(){
+    var statsCur = ui.statsCurrency || RIYAL;
+    var convertedExpenses = getStatsConvertedExpenses(statsCur);
     var hasOtherCurrencies = trip.expenses.some(function(e){ return (e.currency || trip.currencySymbol) !== statsCur; });
 
     var currencyPicker = '<div class="field stats-currency-field">' +
@@ -1643,7 +1747,10 @@
       '<div class="modal modal-wide" role="dialog" aria-modal="true" aria-label="إحصائيات الرحلة">' +
         '<div class="modal-head"><h2>إحصائيات الرحلة</h2><button type="button" class="close-x" data-action="close-modal" aria-label="إغلاق">&times;</button></div>' +
         '<div class="modal-body">' + currencyPicker + body + '</div>' +
-        '<div class="modal-foot"><button type="button" class="btn btn-ghost" data-action="close-modal">إغلاق</button></div>' +
+        '<div class="modal-foot">' +
+          (trip.expenses.length ? '<button type="button" class="btn btn-ghost" data-action="export-stats-pdf">📄 تصدير PDF</button>' : '') +
+          '<button type="button" class="btn btn-ghost" data-action="close-modal">إغلاق</button>' +
+        '</div>' +
       '</div>' +
     '</div>';
   }
@@ -1660,7 +1767,10 @@
     }).join("");
   }
 
-  function renderCurrencyStats(cur, expenses, multi){
+  // The numbers behind the stats report — shared by the interactive modal
+  // (renderCurrencyStats, theme-aware) and the static PDF export
+  // (renderStatsPdfHtml, fixed light colors), so both always agree.
+  function computeStatsAggregates(expenses){
     var total = expenses.reduce(function(s,e){ return s + e.amountCents; }, 0);
     var count = expenses.length;
     var avg = count ? Math.round(total / count) : 0;
@@ -1701,16 +1811,23 @@
       .map(function(p){ return { label: personName(p), amount: byShare[p] }; });
     var maxShare = Math.max.apply(null, shareRows.map(function(r){ return r.amount; }).concat([1]));
 
+    return { total: total, count: count, avg: avg, top: top, catRows: catRows, maxCat: maxCat,
+      payerRows: payerRows, maxPayer: maxPayer, shareRows: shareRows, maxShare: maxShare };
+  }
+
+  function renderCurrencyStats(cur, expenses, multi){
+    var a = computeStatsAggregates(expenses);
+
     var summaryHtml = '<div class="stat-summary-grid">' +
-      '<div class="stat-summary-item"><div class="eyebrow">إجمالي الصرف</div><div class="value mono">' + fmt(total, cur) + '</div></div>' +
-      '<div class="stat-summary-item"><div class="eyebrow">عدد المصاريف</div><div class="value mono">' + count + '</div></div>' +
-      '<div class="stat-summary-item"><div class="eyebrow">متوسط المصروف</div><div class="value mono">' + fmt(avg, cur) + '</div></div>' +
-      (top ? '<div class="stat-summary-item"><div class="eyebrow">الأعلى تكلفة</div><div class="value mono" style="font-size:1rem;" title="' + esc(top.description) + '">' + fmt(top.amountCents, cur) + '</div></div>' : '') +
+      '<div class="stat-summary-item"><div class="eyebrow">إجمالي الصرف</div><div class="value mono">' + fmt(a.total, cur) + '</div></div>' +
+      '<div class="stat-summary-item"><div class="eyebrow">عدد المصاريف</div><div class="value mono">' + a.count + '</div></div>' +
+      '<div class="stat-summary-item"><div class="eyebrow">متوسط المصروف</div><div class="value mono">' + fmt(a.avg, cur) + '</div></div>' +
+      (a.top ? '<div class="stat-summary-item"><div class="eyebrow">الأعلى تكلفة</div><div class="value mono" style="font-size:1rem;" title="' + esc(a.top.description) + '">' + fmt(a.top.amountCents, cur) + '</div></div>' : '') +
     '</div>';
 
-    var catHtml = '<div class="stat-block"><h4>حسب التصنيف</h4>' + renderStatBars(catRows, total, maxCat, cur) + '</div>';
-    var payerHtml = '<div class="stat-block"><h4>حسب من دفع</h4>' + renderStatBars(payerRows, total, maxPayer, cur) + '</div>';
-    var shareHtml = '<div class="stat-block"><h4>حسب نصيب كل مسافر</h4>' + renderStatBars(shareRows, total, maxShare, cur) + '</div>';
+    var catHtml = '<div class="stat-block"><h4>حسب التصنيف</h4>' + renderStatBars(a.catRows, a.total, a.maxCat, cur) + '</div>';
+    var payerHtml = '<div class="stat-block"><h4>حسب من دفع</h4>' + renderStatBars(a.payerRows, a.total, a.maxPayer, cur) + '</div>';
+    var shareHtml = '<div class="stat-block"><h4>حسب نصيب كل مسافر</h4>' + renderStatBars(a.shareRows, a.total, a.maxShare, cur) + '</div>';
 
     return '<div class="currency-group">' +
       (multi ? '<div class="currency-group-label">' + esc(currencyLabel(cur)) + '</div>' : '') +
@@ -2022,6 +2139,10 @@
     }
     if (action === "export-excel"){
       exportTripToExcel(trip);
+      return;
+    }
+    if (action === "export-stats-pdf"){
+      exportStatsToPdf();
       return;
     }
     if (action === "open-payment"){
