@@ -309,6 +309,21 @@
   /* ---------- statistics ---------- */
   .stats-currency-field{ max-width:20rem; }
   .stats-convert-note{ margin:.4rem 0 0; font-size:.76rem; color:var(--ink-soft); }
+
+  /* Applied to the إحصائيات modal only while html2canvas is capturing it
+     for the PDF export — forces light colors (overriding whatever the
+     page's current --ink/--paper/etc. actually resolve to under dark
+     mode) and hides the interactive chrome that doesn't belong in a
+     document meant to be shared with other travelers. */
+  .pdf-capturing{
+    --paper:#ffffff; --card:#ffffff; --ink:#0A0A0A; --ink-soft:#5C5C5C; --ink-faint:#9A9A9A;
+    --rule:#E5E5E5; --rule-strong:#CCCCCC; --focus:#0A0A0A;
+    background:#ffffff; color:#0A0A0A; box-shadow:none;
+  }
+  .pdf-capturing .close-x,
+  .pdf-capturing .stats-currency-field,
+  .pdf-capturing .modal-foot{ display:none; }
+  .pdf-export-header{ margin-bottom:1.1rem; padding-bottom:.9rem; border-bottom:1px solid #e5e5e5; }
   .stat-summary-grid{ display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:1rem; margin-bottom:1.4rem; }
   @media (min-width:480px){ .stat-summary-grid{ grid-template-columns:repeat(4, minmax(0,1fr)); } }
   .stat-summary-item .value{ font-size:1.15rem; font-weight:700; margin-top:.2rem; }
@@ -997,95 +1012,66 @@
     return html2pdfLibPromise;
   }
 
-  // Plain, fully inline-styled markup — deliberately NOT reusing the
-  // .stat-* classes from the live modal, since those read CSS custom
-  // properties that flip with the current light/dark theme. A document
-  // meant to be shared with other travelers should look the same (light,
-  // printable) no matter which theme whoever exported it happened to be
-  // using at the time.
-  function renderPdfStatBars(rows, total, maxVal, cur){
-    return rows.map(function(r){
-      var pct = total > 0 ? Math.round((r.amount / total) * 100) : 0;
-      var barPct = maxVal > 0 ? Math.round((r.amount / maxVal) * 100) : 0;
-      return '<div style="display:flex; align-items:center; gap:10px; padding:5px 0; font-size:12px;">' +
-        '<span style="flex:0 0 110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + esc(r.label) + '</span>' +
-        '<div style="flex:1; height:8px; border-radius:4px; background:#ececec;"><div style="height:100%; border-radius:4px; background:#111111; width:' + barPct + '%;"></div></div>' +
-        '<span style="flex:0 0 auto; white-space:nowrap;">' + fmt(r.amount, cur) + ' <span style="color:#8a8a8a;">(' + pct + '%)</span></span>' +
-      '</div>';
-    }).join("");
-  }
-
-  function renderStatsPdfHtml(statsCur, expenses){
-    var a = computeStatsAggregates(expenses);
-    var tile = function(label, value){
-      return '<div style="flex:1 1 40%; min-width:140px; padding:10px 0;">' +
-        '<div style="font-size:11px; color:#7a7a7a; margin-bottom:3px;">' + esc(label) + '</div>' +
-        '<div style="font-size:17px; font-weight:700;">' + value + '</div>' +
-      '</div>';
-    };
-    var summaryHtml = '<div style="display:flex; flex-wrap:wrap; gap:4px 16px; border-top:1px solid #e5e5e5; border-bottom:1px solid #e5e5e5; margin-bottom:18px;">' +
-      tile("إجمالي الصرف", fmt(a.total, statsCur)) +
-      tile("عدد المصاريف", String(a.count)) +
-      tile("متوسط المصروف", fmt(a.avg, statsCur)) +
-      (a.top ? tile("الأعلى تكلفة", fmt(a.top.amountCents, statsCur)) : "") +
-    '</div>';
-    var section = function(title, rows, max){
-      return '<div style="margin-bottom:16px;">' +
-        '<div style="font-size:13px; font-weight:700; margin-bottom:8px;">' + esc(title) + '</div>' +
-        renderPdfStatBars(rows, a.total, max, statsCur) +
-      '</div>';
-    };
-    return '<div style="direction:rtl; text-align:right; font-family:\'Thmanyah Sans\',\'Segoe UI\',Tahoma,sans-serif; color:#0A0A0A; background:#ffffff; padding:26px 30px; width:600px;">' +
-      '<div style="font-family:\'Thmanyah Serif Display\',serif; font-weight:700; font-size:22px; margin-bottom:2px;">إحصائيات الرحلة</div>' +
-      '<div style="font-size:14px; font-weight:600; color:#4b4b4b; margin-bottom:2px;">' + esc(trip.tripName) + '</div>' +
-      '<div style="font-size:11px; color:#9a9a9a; margin-bottom:18px;">صُدِّر في ' + esc(fmtDateFull(todayISO())) + '</div>' +
-      summaryHtml +
-      section("حسب التصنيف", a.catRows, a.maxCat) +
-      section("حسب من دفع", a.payerRows, a.maxPayer) +
-      section("حسب نصيب كل مسافر", a.shareRows, a.maxShare) +
-    '</div>';
-  }
-
+  // Two earlier attempts at this (a plain synthetic off-screen div, then
+  // the same with a fixed->absolute positioning fix) both still produced
+  // a blank PDF on a real phone. Testing this redesign turned up the
+  // actual cause: render() replaces the whole #app subtree on every
+  // state change — including the one pushToast() itself triggers — so a
+  // modal element reference captured before kicking off the (necessarily
+  // async: load the library, wait on fonts) export work goes stale/
+  // disconnected before html2canvas ever sees it, which rasterizes as
+  // blank. Fixed by re-querying the live node right before the capture,
+  // as the very last step before handing it to html2pdf — capturing the
+  // real, already-visible "إحصائيات الرحلة" modal directly rather than
+  // any synthetic off-screen content. A temporary class hides the
+  // interactive chrome (currency select, close button, footer buttons)
+  // that don't belong in a shared document and forces light colors for
+  // the capture regardless of the app's current theme, by overriding the
+  // same CSS custom properties :root normally sets — scoped to just this
+  // node, so nothing elsewhere on the page is affected while it's on.
   function exportStatsToPdf(){
     if (!trip.expenses.length) return;
+    if (!document.querySelector('.modal[aria-label="إحصائيات الرحلة"]')) return;
     pushToast("جارٍ تجهيز ملف PDF...");
-    loadHtml2PdfLib().then(function(html2pdf){
-      var statsCur = ui.statsCurrency || RIYAL;
-      var convertedExpenses = getStatsConvertedExpenses(statsCur);
-      var container = document.createElement("div");
-      // Off-screen via `absolute`, not `fixed` — html2canvas clones the
-      // target node into an isolated iframe to rasterize it, and a
-      // position:fixed source element placed thousands of pixels off
-      // viewport is a well-known trigger for that clone coming out
-      // completely blank (the fixed-positioning reference frame doesn't
-      // survive the clone). `absolute` + explicit left/top avoids it.
-      container.style.cssText = "position:absolute; top:0; left:-9999px;";
-      container.innerHTML = renderStatsPdfHtml(statsCur, convertedExpenses);
-      document.body.appendChild(container);
+    loadHtml2PdfLib().catch(function(){
+      pushToast("تعذّر تحميل مكتبة تصدير PDF. تحقق من الاتصال بالإنترنت وحاول مجدداً.");
+      return Promise.reject(new Error("lib-load-failed"));
+    }).then(function(html2pdf){
+      // Guard against the embedded @font-face files not having finished
+      // loading yet — capturing before they're ready can leave Arabic
+      // text blank or in a fallback font.
+      return (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(function(){
+        var modalEl = document.querySelector('.modal[aria-label="إحصائيات الرحلة"]');
+        if (!modalEl) throw new Error("modal-closed");
 
-      // Also guard against the embedded @font-face files not having
-      // finished loading yet — capturing before they're ready can
-      // silently fall back to no visible glyphs.
-      (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(function(){
-        return html2pdf().from(container).set({
+        var header = document.createElement("div");
+        header.className = "pdf-export-header";
+        header.innerHTML =
+          '<div style="font-weight:700; font-size:1.1rem;">' + esc(trip.tripName) + '</div>' +
+          '<div style="font-size:.78rem; color:#7a7a7a; margin-top:.15rem;">صُدِّر في ' + esc(fmtDateFull(todayISO())) + '</div>';
+        var bodyEl = modalEl.querySelector(".modal-body");
+        bodyEl.insertBefore(header, bodyEl.firstChild);
+        modalEl.classList.add("pdf-capturing");
+
+        return html2pdf().from(modalEl).set({
           margin: 10,
           filename: (trip.tripName || "رحلة") + " - إحصائيات.pdf",
-          // scrollX/scrollY:0 stop html2canvas from offsetting the
-          // capture by the page's current scroll position, which it
-          // otherwise combines with the element's own (off-screen)
-          // position and can crop the capture down to nothing.
-          html2canvas: { scale: 2, backgroundColor: "#ffffff", scrollX: 0, scrollY: 0 },
+          html2canvas: { scale: 2, backgroundColor: "#ffffff" },
           jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
-        }).save();
-      }).then(function(){
-        document.body.removeChild(container);
-        pushToast("تم تنزيل ملف PDF.");
-      }).catch(function(){
-        if (container.parentNode) document.body.removeChild(container);
-        pushToast("تعذّر إنشاء ملف PDF.");
+        }).save().then(function(){
+          modalEl.classList.remove("pdf-capturing");
+          header.remove();
+        }, function(err){
+          modalEl.classList.remove("pdf-capturing");
+          if (header.parentNode) header.remove();
+          throw err;
+        });
       });
-    }).catch(function(){
-      pushToast("تعذّر تحميل مكتبة تصدير PDF. تحقق من الاتصال بالإنترنت وحاول مجدداً.");
+    }).then(function(){
+      pushToast("تم تنزيل ملف PDF.");
+    }).catch(function(err){
+      if (err && err.message === "lib-load-failed") return; // already reported above
+      pushToast("تعذّر إنشاء ملف PDF.");
     });
   }
 
@@ -1780,9 +1766,9 @@
     }).join("");
   }
 
-  // The numbers behind the stats report — shared by the interactive modal
-  // (renderCurrencyStats, theme-aware) and the static PDF export
-  // (renderStatsPdfHtml, fixed light colors), so both always agree.
+  // The numbers behind the stats report, used by renderCurrencyStats()
+  // (also indirectly by the PDF export, which captures that rendered
+  // output directly rather than recomputing it separately).
   function computeStatsAggregates(expenses){
     var total = expenses.reduce(function(s,e){ return s + e.amountCents; }, 0);
     var count = expenses.length;
