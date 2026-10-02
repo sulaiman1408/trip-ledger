@@ -1053,18 +1053,31 @@
       var statsCur = ui.statsCurrency || RIYAL;
       var convertedExpenses = getStatsConvertedExpenses(statsCur);
       var container = document.createElement("div");
-      // Off-screen rather than hidden — a hidden (display:none) element
-      // has no layout box for html2canvas to measure/paint.
-      container.style.cssText = "position:fixed; top:0; inset-inline-start:-9999px;";
+      // Off-screen via `absolute`, not `fixed` — html2canvas clones the
+      // target node into an isolated iframe to rasterize it, and a
+      // position:fixed source element placed thousands of pixels off
+      // viewport is a well-known trigger for that clone coming out
+      // completely blank (the fixed-positioning reference frame doesn't
+      // survive the clone). `absolute` + explicit left/top avoids it.
+      container.style.cssText = "position:absolute; top:0; left:-9999px;";
       container.innerHTML = renderStatsPdfHtml(statsCur, convertedExpenses);
       document.body.appendChild(container);
 
-      html2pdf().from(container).set({
-        margin: 10,
-        filename: (trip.tripName || "رحلة") + " - إحصائيات.pdf",
-        html2canvas: { scale: 2, backgroundColor: "#ffffff" },
-        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
-      }).save().then(function(){
+      // Also guard against the embedded @font-face files not having
+      // finished loading yet — capturing before they're ready can
+      // silently fall back to no visible glyphs.
+      (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(function(){
+        return html2pdf().from(container).set({
+          margin: 10,
+          filename: (trip.tripName || "رحلة") + " - إحصائيات.pdf",
+          // scrollX/scrollY:0 stop html2canvas from offsetting the
+          // capture by the page's current scroll position, which it
+          // otherwise combines with the element's own (off-screen)
+          // position and can crop the capture down to nothing.
+          html2canvas: { scale: 2, backgroundColor: "#ffffff", scrollX: 0, scrollY: 0 },
+          jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
+        }).save();
+      }).then(function(){
         document.body.removeChild(container);
         pushToast("تم تنزيل ملف PDF.");
       }).catch(function(){
