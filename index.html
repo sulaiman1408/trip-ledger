@@ -1598,9 +1598,23 @@
         });
       });
       var combinedTxns = simplifyDebts(combinedRiyalBal);
-      settleBody = combinedTxns.length === 0
-        ? '<p class="settle-empty">تمت تسوية الجميع.</p>'
-        : combinedTxns.map(function(t){ return renderSettleTxn(t, RIYAL); }).join("");
+      if (combinedTxns.length === 0){
+        // The combined Riyal-equivalent net can land on zero while a
+        // currency's own balances (shown as-is in "الأرصدة" above) are
+        // still non-zero — e.g. a debt in one currency was paid off
+        // using a Riyal-combined settlement recorded in a different
+        // currency, which zeroes the combined total without directly
+        // touching that other currency's own ledger. Say so plainly
+        // instead of reusing the identical "كل شيء مُسوّى" wording the
+        // true all-currencies-zero case uses, which is what actually
+        // confused a user into reading this as the whole trip being
+        // settled when raw per-currency balances said otherwise.
+        settleBody = tripIsUnsettled(trip)
+          ? '<p class="settle-empty">الصافي الإجمالي بعد تحويل كل العملات للريال = صفر، لكن تبقى أرصدة غير مُسوّاة بعملاتها الأصلية — راجع «الأرصدة» أعلاه.</p>'
+          : '<p class="settle-empty">تمت تسوية الجميع.</p>';
+      } else {
+        settleBody = combinedTxns.map(function(t){ return renderSettleTxn(t, RIYAL); }).join("");
+      }
     } else {
       var settleGroups = currencies.map(function(cur){
         var txns = simplifyDebts(bal[cur]);
@@ -1613,6 +1627,9 @@
 
     var settleToggle = trip.people.length === 0 ? '' :
       '<label class="settle-riyal-toggle"><input type="checkbox" data-field="settleInRiyal"' + (ui.settleInRiyal ? " checked" : "") + '> حوّل التسوية إلى الريال السعودي</label>';
+    var settleRiyalNote = (ui.settleInRiyal && trip.people.length > 0)
+      ? '<p class="stats-convert-note">تُجمع كل العملات في تسوية واحدة بالريال. أرصدة كل عملة بعينها تبقى كما هي في «الأرصدة» أعلاه.</p>'
+      : '';
 
     return '' +
     '<div>' +
@@ -1622,7 +1639,7 @@
       '</div>' +
       '<div class="card" style="margin-top:1.5rem;">' +
         '<div class="card-head"><h2>التسوية</h2>' + settleToggle + '</div>' +
-        '<div class="card-body">' + settleBody + '</div>' +
+        '<div class="card-body">' + settleRiyalNote + settleBody + '</div>' +
       '</div>' +
       renderSettlementHistoryCard() +
     '</div>';
